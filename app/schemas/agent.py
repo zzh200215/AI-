@@ -63,6 +63,9 @@ class AgentRunOut(BaseModel):
     failure_reason: str | None = None
     total_steps: int | None = None
     error: str | None = None
+    agent_type: str | None = None
+    parent_run_id: int | None = None
+    delegation_id: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
 
@@ -81,6 +84,8 @@ class AgentRunHistoryOut(BaseModel):
     final_answer: str | None = None
     failure_reason: str | None = None
     total_steps: int | None = None
+    agent_type: str | None = None
+    parent_run_id: int | None = None
     created_at: datetime
     completed_at: datetime | None = None
 
@@ -118,6 +123,8 @@ class AgentApprovalRequestOut(BaseModel):
     agent_type: str | None = None
     input_params: str | None = None
     risk_level: str
+    policy_version: str | None = None
+    data_scope: str | None = None
     status: str
     approval_token: str
     decision_note: str | None = None
@@ -125,3 +132,47 @@ class AgentApprovalRequestOut(BaseModel):
     decided_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class A2ADelegationRequest(BaseModel):
+    to_agent_type: str = Field(min_length=1, max_length=64)
+    task: str = Field(min_length=1, max_length=20000)
+    task_type: str = Field(default="analysis", min_length=1, max_length=64)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+
+
+class A2ADelegationOut(BaseModel):
+    delegation_id: str
+    parent_run_id: int
+    child_run_id: int | None = None
+    from_agent_type: str
+    to_agent_type: str
+    task_type: str
+    status: str
+    trace_id: str | None = None
+    authorization_snapshot_bound: bool = False
+    input_hash: str
+    task_summary: dict = Field(default_factory=dict)
+    result_summary: dict = Field(default_factory=dict)
+    error_code: str | None = None
+    created_at: datetime | None = None
+    accepted_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class A2AAuditEventOut(BaseModel):
+    id: int
+    run_id: int | None = None
+    step: int | None = None
+    trace_id: str | None = None
+    event_type: str
+    status: str | None = None
+    error_category: str | None = None
+    decision: dict = Field(default_factory=dict)
+    summary: dict = Field(default_factory=dict)
+    created_at: datetime | None = None
+
+
+class A2AAuditReplayOut(BaseModel):
+    delegations: list[A2ADelegationOut] = Field(default_factory=list)
+    events: list[A2AAuditEventOut] = Field(default_factory=list)

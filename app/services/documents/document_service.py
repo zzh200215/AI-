@@ -18,6 +18,7 @@ from app.services.documents.document_pipeline import (
 )
 from app.services.documents.extraction import ExtractionMixin
 from app.services.documents.ingest import IngestMixin
+from app.services.documents.multimodal import MultimodalMixin
 from app.services.documents.queries import QueriesMixin
 from app.services.documents.read_analyze import ReadAnalyzeMixin
 from app.services.rag.rag_service import rag_service
@@ -48,7 +49,7 @@ def _try_index_document(document_id: int, chunks: list[dict], *, user_id: int | 
         return exc
 
 
-class DocumentService(IngestMixin, ReadAnalyzeMixin, ConflictMixin, ExtractionMixin, QueriesMixin):
+class DocumentService(IngestMixin, ReadAnalyzeMixin, MultimodalMixin, ConflictMixin, ExtractionMixin, QueriesMixin):
     def _run_sync_pipeline(
         self, db: Session, doc: Document, *, user_id: int | None = None, knowledge_base_id: int | None = None
     ) -> dict:

@@ -1,5 +1,6 @@
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import relationship
+
 from app.core.database import Base
 
 
@@ -75,6 +76,7 @@ class Document(Base):
     parent_document = relationship("Document", remote_side=[id])
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
     parse_jobs = relationship("DocumentParseJob", back_populates="document", cascade="all, delete-orphan")
+    multimodal_analyses = relationship("DocumentMultimodalAnalysis", back_populates="document", cascade="all, delete-orphan")
     qa_records = relationship("DocumentQARecord", back_populates="document", cascade="all, delete-orphan")
 
 
@@ -176,6 +178,31 @@ class DocumentParseArtifact(Base):
     )
 
     document = relationship("Document")
+
+
+class DocumentMultimodalAnalysis(Base):
+    """版面/OCR/印章/表格分析产物，按文档版本保存以支持证据回放。"""
+
+    __tablename__ = "document_multimodal_analyses"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_number = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="ready", index=True)
+    parser_version = Column(String(64), nullable=True)
+    vision_model = Column(String(128), nullable=True)
+    page_count = Column(Integer, nullable=False, default=0)
+    ocr_confidence = Column(Float, nullable=True)
+    review_required = Column(Boolean, nullable=False, default=False)
+    payload_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    document = relationship("Document", back_populates="multimodal_analyses")
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "version_number", name="uq_document_multimodal_doc_version"),
+    )
 
 
 class DocumentQARecord(Base):

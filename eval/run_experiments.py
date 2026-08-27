@@ -39,8 +39,12 @@ def _build_summary_delta(candidate_summary: dict, baseline_summary: dict | None)
         return {}
     tracked_metrics = (
         "hit_at_k",
+        "mrr",
         "citation_accuracy",
         "refusal_accuracy",
+        "answer_accuracy",
+        "retrieval_evidence_coverage",
+        "citation_evidence_coverage",
         "badcase_count",
     )
     delta = {}
@@ -102,7 +106,15 @@ def compare_with_baseline(current_result: dict, baseline_snapshot: dict) -> dict
     baseline_summary = baseline_payload.get("summary") or {}
 
     regressions = []
-    for metric in ("hit_at_k", "citation_accuracy", "refusal_accuracy"):
+    for metric in (
+        "hit_at_k",
+        "mrr",
+        "citation_accuracy",
+        "refusal_accuracy",
+        "answer_accuracy",
+        "retrieval_evidence_coverage",
+        "citation_evidence_coverage",
+    ):
         current_value = current_summary.get(metric)
         baseline_value = baseline_summary.get(metric)
         if current_value is None or baseline_value is None:

@@ -13,9 +13,11 @@ from typing import Any
 
 from app.core.async_utils import run_async
 from app.core.config import get_settings
+from app.core.telemetry import observe_span
 from app.services.llm.llm_observability_service import llm_observability_service
 from app.services.llm.llm_service import llm_service
 from app.services.rag.rag_service import rag_service
+from app.services.rag.trace import get_last_trace
 from app.workflows.langgraph_compat import GRAPH_END, GRAPH_START, StateGraph, workflow_engine_name
 
 
@@ -40,7 +42,8 @@ class AgenticRAGService:
             + ("上一轮证据不足，请将问题改写为更利于定位制度、条款、日期、金额、责任人或例外条件的检索表达。" if refinement else "请保留原问题的业务实体、时间、数值和约束。")
         )
         try:
-            raw = await llm_service.generate(prompt, temperature=0.0, action="agentic_rag_plan", user_id=user_id)
+            with observe_span("rag.plan", {"rag.planner": "llm"}):
+                raw = await llm_service.generate(prompt, temperature=0.0, action="agentic_rag_plan", user_id=user_id)
             payload = llm_service.parse_json_object(raw)
             search_query = str(payload.get("search_query") or "").strip()
             if search_query and len(search_query) <= 300:
@@ -106,6 +109,11 @@ class AgenticRAGService:
         state["round"] += 1
         state["retrieval_duration_ms"] += duration_ms
         state["latest_chunks"] = chunks
+        retrieval_trace = get_last_trace() or {
+            "trace_version": 1,
+            "retrieval": {"reranked_candidates": len(chunks)},
+        }
+        state["latest_retrieval_trace"] = retrieval_trace
         state["latest_confidence"] = confidence
         if confidence >= state.get("best_confidence", -1.0):
             state["best_chunks"] = chunks
@@ -117,6 +125,7 @@ class AgenticRAGService:
                 "hit_count": len(chunks),
                 "confidence": round(confidence, 4),
                 "duration_ms": duration_ms,
+                "retrieval_trace": retrieval_trace.get("retrieval", {}),
             }
         )
         return state
@@ -154,28 +163,38 @@ class AgenticRAGService:
         return state
 
     async def _workflow_generate(self, state: dict[str, Any]) -> dict[str, Any]:
-        result = await rag_service.answer_from_chunks_async(
-            state["question"],
-            chunks=state["best_chunks"],
-            document_id=state.get("document_id"),
-            user_id=state.get("user_id"),
-            runtime_config=state["runtime_config"],
-            started=state["started"],
-            retrieval_duration_ms=state["retrieval_duration_ms"],
-            log_query=state["question"],
-            knowledge_base_id=state.get("knowledge_base_id"),
-            document_status=state.get("document_status"),
-            authorized_document_ids=state.get("authorized_document_ids"),
-            conversation_history=state.get("conversation_history"),
-        )
+        with observe_span("rag.agentic", {"rag.rounds": state["round"]}):
+            result = await rag_service.answer_from_chunks_async(
+                state["question"],
+                chunks=state["best_chunks"],
+                document_id=state.get("document_id"),
+                user_id=state.get("user_id"),
+                runtime_config=state["runtime_config"],
+                started=state["started"],
+                retrieval_duration_ms=state["retrieval_duration_ms"],
+                log_query=state["question"],
+                knowledge_base_id=state.get("knowledge_base_id"),
+                document_status=state.get("document_status"),
+                authorized_document_ids=state.get("authorized_document_ids"),
+                conversation_history=state.get("conversation_history"),
+                retrieval_trace=state.get("latest_retrieval_trace"),
+            )
         trace = {
             "enabled": True,
+            "trace_version": 1,
             "workflow_engine": workflow_engine_name(),
             "retrieval_rounds": state["round"],
             "final_evidence_confidence": round(max(state.get("best_confidence", 0.0), 0.0), 4),
             "steps": state["trace"],
+            "generation": {
+                "status": "success" if result.get("can_answer") else "degraded",
+                "duration_ms": result.get("observability", {}).get("generation_duration_ms", 0),
+                "degradation_reason": result.get("refusal_reason"),
+            },
         }
         result["agentic_rag"] = trace
+        result.setdefault("observability", {})["trace_version"] = 1
+        result.setdefault("observability", {})["degradation_reason"] = result.get("refusal_reason")
         result.setdefault("observability", {})["agentic_retrieval_rounds"] = state["round"]
         llm_observability_service.log_event(
             module_name="document",
@@ -235,6 +254,7 @@ class AgenticRAGService:
             "trace": [],
             "started": time.time(),
             "result": None,
+            "latest_retrieval_trace": None,
         }
         final_state = await self._workflow.ainvoke(state)
         return final_state["result"]

@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -42,10 +43,22 @@ def validate_dataset(dataset: list[dict]) -> list[str]:
             continue
         if not str(item.get("question") or "").strip():
             errors.append(f"case {index}: question is required")
-        if not item.get("should_refuse") and not item.get("expected_chunk_keywords"):
-            errors.append(f"case {index}: answerable case requires expected_chunk_keywords")
+        if (
+            not item.get("should_refuse")
+            and not item.get("expected_chunk_keywords")
+            and not item.get("expected_evidence")
+            and not item.get("expected_answer_keywords")
+        ):
+            errors.append(
+                f"case {index}: answerable case requires expected_chunk_keywords, expected_evidence, or expected_answer_keywords"
+            )
         if item.get("expected_answer_keywords") and not isinstance(item.get("expected_answer_keywords"), list):
             errors.append(f"case {index}: expected_answer_keywords must be a list")
+        if item.get("expected_evidence") is not None:
+            if not isinstance(item.get("expected_evidence"), list):
+                errors.append(f"case {index}: expected_evidence must be a list")
+            elif not _normalize_expected_evidence(item):
+                errors.append(f"case {index}: expected_evidence must include keywords")
     return errors
 
 
@@ -57,6 +70,68 @@ def _normalize_expected_keywords(item: dict) -> list[str]:
     if references:
         return [keyword for keyword in references if keyword]
     return []
+
+
+def _normalize_expected_evidence(item: dict) -> list[dict]:
+    """Normalize strict multi-evidence annotations while preserving old data."""
+    raw_evidence = item.get("expected_evidence")
+    if raw_evidence is not None:
+        if not isinstance(raw_evidence, list):
+            return []
+        normalized = []
+        for index, evidence in enumerate(raw_evidence, start=1):
+            if not isinstance(evidence, dict):
+                continue
+            keywords = evidence.get("keywords") or evidence.get("terms") or []
+            if not isinstance(keywords, list):
+                continue
+            cleaned = [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+            if not cleaned:
+                continue
+            normalized.append({
+                "id": str(evidence.get("id") or f"evidence_{index}"),
+                "keywords": cleaned,
+                "match": "all" if str(evidence.get("match") or "any").lower() == "all" else "any",
+            })
+        return normalized
+
+    keywords = _normalize_expected_keywords(item)
+    if not keywords:
+        return []
+    return [{
+        "id": "default",
+        "keywords": keywords,
+        "match": "all" if str(item.get("expected_chunk_match") or "any").lower() == "all" else "any",
+    }]
+
+
+def _text_matches_evidence(text: str, evidence: dict) -> bool:
+    keywords = evidence.get("keywords") or []
+    if evidence.get("match") == "all":
+        return bool(keywords) and all(keyword in text for keyword in keywords)
+    return bool(keywords) and any(keyword in text for keyword in keywords)
+
+
+def _evidence_metrics(evidence: list[dict], items: list[dict], *, text_key: str) -> dict:
+    if not evidence:
+        return {"hit": True, "coverage": 1.0, "first_relevant_rank": None, "relevant_ranks": []}
+    matched_ids: set[str] = set()
+    relevant_ranks: list[int] = []
+    for rank, item in enumerate(items, start=1):
+        text = str(item.get(text_key) or "")
+        matched_here = False
+        for expected in evidence:
+            if _text_matches_evidence(text, expected):
+                matched_ids.add(expected["id"])
+                matched_here = True
+        if matched_here:
+            relevant_ranks.append(rank)
+    return {
+        "hit": bool(relevant_ranks),
+        "coverage": round(len(matched_ids) / len(evidence), 4),
+        "first_relevant_rank": relevant_ranks[0] if relevant_ranks else None,
+        "relevant_ranks": relevant_ranks,
+    }
 
 
 def keyword_hit(expected_keywords: list[str], hit_chunks: list[dict]) -> bool:
@@ -117,6 +192,36 @@ def _percentile(sorted_values: list[float], p: int) -> float:
     return round(sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight, 2)
 
 
+def _ndcg_at_k(relevant_ranks: list[int], *, total_relevant: int, k: int) -> float:
+    """Binary nDCG for one case; ranks are 1-based."""
+    if total_relevant <= 0:
+        return 1.0
+    dcg = sum(1.0 / math.log2(rank + 1) for rank in relevant_ranks if rank <= k)
+    ideal_count = min(total_relevant, k)
+    ideal_dcg = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_count + 1))
+    return round(dcg / ideal_dcg, 4) if ideal_dcg else 0.0
+
+
+def _build_category_summary(cases: list[dict]) -> dict[str, dict]:
+    categories: dict[str, dict] = {}
+    for case in cases:
+        category = str(case.get("category") or "uncategorized")
+        summary = categories.setdefault(category, {
+            "total_cases": 0,
+            "answerable_cases": 0,
+            "refusal_cases": 0,
+            "badcase_count": 0,
+            "outcomes": {},
+        })
+        summary["total_cases"] += 1
+        summary["refusal_cases" if case.get("should_refuse") else "answerable_cases"] += 1
+        outcome = str(case.get("case_outcome") or "unknown")
+        summary["outcomes"][outcome] = summary["outcomes"].get(outcome, 0) + 1
+        if outcome not in {"pass", "correct_refusal"}:
+            summary["badcase_count"] += 1
+    return categories
+
+
 def run_eval(
     dataset: list[dict],
     *,
@@ -151,12 +256,18 @@ def run_eval(
         "answer_correct_count": 0,
         "latency_ms_total": 0,
         "agentic_retrieval_rounds_total": 0,
+        "mrr_total": 0.0,
+        "ndcg_total": 0.0,
+        "retrieval_evidence_coverage_total": 0.0,
+        "citation_evidence_coverage_total": 0.0,
+        "retrieval_evidence_labeled_count": 0,
     }
     cases = []
 
     for item in dataset:
         should_refuse = bool(item.get("should_refuse"))
         expected_keywords = _normalize_expected_keywords(item)
+        expected_evidence = _normalize_expected_evidence(item)
         started = time.perf_counter()
         result = agentic_rag_service.answer(
             item["question"],
@@ -173,8 +284,10 @@ def run_eval(
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
         agentic_trace = result.get("agentic_rag") or {}
         retrieval_rounds = int(agentic_trace.get("retrieval_rounds") or 0)
-        hit = keyword_hit(expected_keywords, result.get("hit_chunks") or [])
-        citation_ok = citation_hit(expected_keywords, result.get("citations") or [])
+        retrieval_evidence = _evidence_metrics(expected_evidence, result.get("hit_chunks") or [], text_key="content")
+        citation_evidence = _evidence_metrics(expected_evidence, result.get("citations") or [], text_key="source_text")
+        hit = retrieval_evidence["hit"]
+        citation_ok = citation_evidence["hit"]
         expected_answer_keywords = [str(item).strip() for item in item.get("expected_answer_keywords") or [] if str(item).strip()]
         answer_ok = answer_hit(expected_answer_keywords, result.get("answer", ""))
         refusal_correct = should_refuse and not result.get("can_answer", False)
@@ -190,6 +303,18 @@ def run_eval(
                 totals["hit_count"] += 1
             if result.get("can_answer", False) and citation_ok:
                 totals["citation_hit_count"] += 1
+            if expected_evidence:
+                totals["retrieval_evidence_labeled_count"] += 1
+                totals["retrieval_evidence_coverage_total"] += retrieval_evidence["coverage"]
+                totals["citation_evidence_coverage_total"] += citation_evidence["coverage"]
+                first_rank = retrieval_evidence["first_relevant_rank"]
+                if first_rank is not None:
+                    totals["mrr_total"] += 1.0 / first_rank
+                totals["ndcg_total"] += _ndcg_at_k(
+                    retrieval_evidence["relevant_ranks"],
+                    total_relevant=len(expected_evidence),
+                    k=runtime_config["top_k"],
+                )
             if answer_ok is not None:
                 totals["answer_labeled_count"] += 1
                 if answer_ok:
@@ -206,12 +331,18 @@ def run_eval(
                 "question": item["question"],
                 "reference_answer": item.get("reference_answer", ""),
                 "expected_chunk_keywords": expected_keywords,
+                "expected_evidence": expected_evidence,
+                "retrieval_evidence_labeled": bool(expected_evidence),
                 "expected_answer_keywords": expected_answer_keywords,
                 "should_refuse": should_refuse,
                 "can_answer": result.get("can_answer", False),
                 "confidence": result.get("confidence", 0.0),
                 "hit": hit,
+                "retrieval_evidence_coverage": retrieval_evidence["coverage"],
+                "first_relevant_rank": retrieval_evidence["first_relevant_rank"],
+                "relevant_ranks": retrieval_evidence["relevant_ranks"],
                 "citation_hit": citation_ok,
+                "citation_evidence_coverage": citation_evidence["coverage"],
                 "answer_hit": answer_ok,
                 "latency_ms": latency_ms,
                 "agentic_rag": agentic_trace,
@@ -229,6 +360,8 @@ def run_eval(
     latencies = sorted(c.get("latency_ms") or 0 for c in cases)
     latency_p50 = _percentile(latencies, 50)
     latency_p95 = _percentile(latencies, 95)
+    category_summary = _build_category_summary(cases)
+    retrieval_evidence_labeled_count = totals["retrieval_evidence_labeled_count"]
     return {
         "evaluation_id": f"rag_eval_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{fingerprint[:8]}",
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
@@ -252,6 +385,11 @@ def run_eval(
             "answerable_cases": totals["answerable_count"],
             "refusal_cases": totals["refusal_count"],
             "hit_at_k": round(totals["hit_count"] / answerable_count, 4) if totals["answerable_count"] else None,
+            "retrieval_evidence_labeled_cases": retrieval_evidence_labeled_count,
+            "mrr": round(totals["mrr_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
+            f"ndcg_at_{runtime_config['top_k']}": round(totals["ndcg_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
+            "retrieval_evidence_coverage": round(totals["retrieval_evidence_coverage_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
+            "citation_evidence_coverage": round(totals["citation_evidence_coverage_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
             "citation_accuracy": round(totals["citation_hit_count"] / answerable_count, 4) if totals["answerable_count"] else None,
             "refusal_accuracy": round(totals["refusal_correct_count"] / refusal_count, 4) if totals["refusal_count"] else None,
             "hit_count": totals["hit_count"],
@@ -270,6 +408,7 @@ def run_eval(
         },
         "cases": cases,
         "badcases": badcases,
+        "category_summary": category_summary,
     }
 
 

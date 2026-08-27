@@ -1,13 +1,4 @@
-"""PermissionGuard：统一的权限校验边界（不执行任何工具）。
-
-覆盖三层：
-- ``tool_acl``：agent 角色 → 工具 ACL（复用 app.mcp.permissions）。
-- ``authz_snapshot``：Agent 长流程权限快照（复用 authorization_service.assert_snapshot，
-  账号禁用/组织撤销/文档授权撤销立即终止）。
-- ``plan``：执行计划级校验（风险等级/写审批前置）。
-
-所有拒绝都返回结构化 ``PermissionDecision``（可审计），绝不暴露敏感资源信息。
-"""
+"""Single authorization boundary for MCP tool execution."""
 
 from __future__ import annotations
 
@@ -16,12 +7,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.mcp.permissions import agent_allows_tool, allowed_tools_for, canonical_agent_type
+from app.mcp.policy import policy_engine
 from app.models.agent import AgentRun
 
 DECISION_KIND_ACL = "tool_acl"
 DECISION_KIND_SNAPSHOT = "authz_snapshot"
 DECISION_KIND_PLAN = "plan"
+DECISION_KIND_POLICY = "policy"
 
 
 @dataclass(frozen=True)
@@ -32,6 +24,11 @@ class PermissionDecision:
     decision_kind: str = DECISION_KIND_ACL
     agent_type: str | None = None
     tool_name: str | None = None
+    policy_version: str | None = None
+    rule_id: str | None = None
+    data_scope: str | None = None
+    risk_level: str | None = None
+    requires_approval: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -41,28 +38,36 @@ class PermissionDecision:
             "decision_kind": self.decision_kind,
             "agent_type": self.agent_type,
             "tool_name": self.tool_name,
+            "policy_version": self.policy_version,
+            "rule_id": self.rule_id,
+            "data_scope": self.data_scope,
+            "risk_level": self.risk_level,
+            "requires_approval": self.requires_approval,
         }
 
 
 class PermissionGuard:
     def check_tool_acl(self, agent_type: str, tool_name: str) -> PermissionDecision:
-        """角色 × 工具 ACL。工具不在该角色允许集内 → 拒绝。"""
-        canonical = canonical_agent_type(agent_type)
-        if agent_allows_tool(canonical, tool_name):
-            return PermissionDecision(
-                allowed=True, agent_type=canonical, tool_name=tool_name, decision_kind=DECISION_KIND_ACL
-            )
+        policy = policy_engine.evaluate(agent_type=agent_type, tool_name=tool_name)
+        return self._from_policy(policy)
+
+    @staticmethod
+    def _from_policy(policy) -> PermissionDecision:
         return PermissionDecision(
-            allowed=False,
-            reason="Agent 角色无权调用该工具",
-            error_code="MCP_PERMISSION_DENIED",
-            agent_type=canonical,
-            tool_name=tool_name,
-            decision_kind=DECISION_KIND_ACL,
+            allowed=policy.allowed,
+            requires_approval=policy.requires_approval,
+            reason=policy.reason,
+            error_code=policy.error_code,
+            decision_kind=DECISION_KIND_POLICY,
+            agent_type=policy.agent_type,
+            tool_name=policy.tool_name,
+            policy_version=policy.policy_version,
+            rule_id=policy.rule_id,
+            data_scope=policy.data_scope,
+            risk_level=policy.risk_level,
         )
 
     def check_run_snapshot(self, db: Session, *, agent_run_id: int, user_id: int) -> PermissionDecision:
-        """长流程权限快照：无快照视为通过；快照失效（禁用/撤销/过期/token 失效）→ 拒绝。"""
         from app.services.org.authorization_service import authorization_service
 
         run = db.query(AgentRun).filter(AgentRun.id == agent_run_id).first()
@@ -72,13 +77,13 @@ class PermissionGuard:
         try:
             authorization_service.assert_snapshot(db, snapshot_id, user_id=user_id)
             return PermissionDecision(allowed=True, decision_kind=DECISION_KIND_SNAPSHOT)
-        except Exception as exc:  # noqa: BLE001 - 统一映射为拒绝，不泄露细节
+        except Exception as exc:  # noqa: BLE001
             code = getattr(getattr(exc, "detail", None), "get", lambda *_: "authz_changed")(
                 "code", "authz_changed"
             )
             return PermissionDecision(
                 allowed=False,
-                reason="执行已终止：权限已变化，请重新发起",
+                reason="Agent authorization snapshot is no longer valid",
                 error_code=code,
                 decision_kind=DECISION_KIND_SNAPSHOT,
             )
@@ -91,50 +96,55 @@ class PermissionGuard:
         db: Session | None,
         agent_run_id: int | None,
         user_id: int | None,
+        organization_id: int | None = None,
+        policy_context: dict[str, Any] | None = None,
     ) -> PermissionDecision:
-        """工具执行前统一校验：先 ACL，后权限快照。任一拒绝即拒绝。"""
-        acl = self.check_tool_acl(agent_type, tool_name)
-        if not acl.allowed:
-            return acl
+        static = self.check_tool_acl(agent_type, tool_name)
+        if not static.allowed:
+            return static
+        policy = policy_engine.evaluate(
+            agent_type=agent_type,
+            tool_name=tool_name,
+            db=db,
+            context={**(policy_context or {}), "organization_id": organization_id},
+        )
+        if not policy.allowed:
+            return self._from_policy(policy)
+        decision = self._from_policy(policy)
         if db is not None and agent_run_id is not None and user_id is not None:
             snapshot = self.check_run_snapshot(db, agent_run_id=agent_run_id, user_id=user_id)
             if not snapshot.allowed:
                 return snapshot
-        return acl
+        return decision
 
     def check_plan(self, plan: dict[str, Any] | None) -> PermissionDecision:
-        """计划级校验：写审批前置。计划要求审批但上下文不允许 → 拒绝执行。"""
         if not isinstance(plan, dict):
             return PermissionDecision(allowed=True, decision_kind=DECISION_KIND_PLAN)
         if plan.get("requires_approval") and plan.get("approval_context_missing"):
             return PermissionDecision(
                 allowed=False,
-                reason="计划包含需要审批的步骤但缺少审批上下文",
+                reason="Plan approval context is missing",
                 error_code="PLAN_APPROVAL_REQUIRED",
                 decision_kind=DECISION_KIND_PLAN,
             )
         return PermissionDecision(allowed=True, decision_kind=DECISION_KIND_PLAN)
 
     def denied_result(self, decision: PermissionDecision) -> dict[str, Any]:
-        """把拒绝决策映射为与 MCP registry 一致的错误响应结构。
-
-        权限快照失效统一用 AUTHZ_CHANGED（与历史 _assert_run_snapshot 契约一致），
-        具体错误码保留在 data.error_code。
-        """
-        if decision.decision_kind == DECISION_KIND_SNAPSHOT:
-            mcp_code = "AUTHZ_CHANGED"
-        else:
-            mcp_code = decision.error_code or "MCP_PERMISSION_DENIED"
+        mcp_code = "AUTHZ_CHANGED" if decision.decision_kind == DECISION_KIND_SNAPSHOT else decision.error_code or "MCP_PERMISSION_DENIED"
         return {
             "success": False,
-            "message": decision.reason or "权限拒绝",
+            "message": decision.reason or "Permission denied",
             "data": {
                 "agent_type": decision.agent_type,
                 "requested_tool": decision.tool_name,
                 "decision_kind": decision.decision_kind,
                 "error_code": decision.error_code,
+                "policy_version": decision.policy_version,
+                "rule_id": decision.rule_id,
+                "data_scope": decision.data_scope,
+                "risk_level": decision.risk_level,
             },
-            "error": decision.reason or "权限拒绝",
+            "error": decision.reason or "Permission denied",
             "mcp_error_code": mcp_code,
             "mcp_http_status": 403,
         }

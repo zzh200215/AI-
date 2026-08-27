@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.core.api_response import api_error, paginated_payload
 from app.core.auth import get_current_user, require_admin_user
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.user import User
-from app.services.observability.analytics_service import analytics_service
 from app.services.documents.document_qa_service import document_qa_service
+from app.services.observability.analytics_service import analytics_service
 
 router = APIRouter()
 
@@ -24,6 +24,20 @@ class ResolveFeedbackRequest(BaseModel):
 
 class FeedbackEvalBundleRequest(BaseModel):
     days: int = 30
+
+
+class MCPPolicyDraftRequest(BaseModel):
+    policy: dict
+
+
+class AgentEvalReviewRequest(BaseModel):
+    evaluation_input: dict
+    expected_outcome: dict
+    review_note: str | None = None
+
+
+class AgentEvalRejectRequest(BaseModel):
+    review_note: str | None = None
 
 
 @router.get("/tokens/my-stats")
@@ -95,6 +109,12 @@ def list_llm_calls(
             "status": row.status,
             "routing_role": row.routing_role,
             "routing_stage": row.routing_stage,
+            "model_release_version": row.model_release_version,
+            "experiment_bucket": row.experiment_bucket,
+            "traffic_type": row.traffic_type,
+            "routing_reason": row.routing_reason,
+            "request_complexity": row.request_complexity,
+            "risk_level": row.risk_level,
             "error_message": row.error_message if current_user.role == "admin" else None,
             "request_excerpt": row.request_excerpt if current_user.role == "admin" else None,
             "response_excerpt": row.response_excerpt if current_user.role == "admin" else None,
@@ -513,6 +533,155 @@ def export_feedback_eval_bundle(
         include_all_users=True,
         days=req.days,
     )
+
+
+@router.get("/mcp-policies")
+def list_mcp_policy_versions(
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user),
+):
+    from app.services.agent.mcp_policy_service import mcp_policy_service
+
+    _ = current_user
+    return [
+        {
+            "id": row.id,
+            "version": row.version,
+            "schema_version": row.schema_version,
+            "status": row.status,
+            "checksum": row.checksum,
+            "created_by": row.created_by,
+            "activated_by": row.activated_by,
+            "created_at": row.created_at,
+            "activated_at": row.activated_at,
+        }
+        for row in mcp_policy_service.list_versions(db, limit=limit)
+    ]
+
+
+@router.post("/mcp-policies")
+def save_mcp_policy_draft(
+    req: MCPPolicyDraftRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user),
+):
+    from app.services.agent.mcp_policy_service import mcp_policy_service
+
+    try:
+        row = mcp_policy_service.save_draft(db, document=req.policy, actor_id=current_user.id)
+    except ValueError as exc:
+        raise api_error(400, "MCP 策略校验失败", code="MCP_POLICY_INVALID", detail=str(exc)) from exc
+    return {"id": row.id, "version": row.version, "status": row.status, "checksum": row.checksum}
+
+
+@router.post("/mcp-policies/{version}/activate")
+def activate_mcp_policy(
+    version: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user),
+):
+    from app.services.agent.mcp_policy_service import mcp_policy_service
+
+    try:
+        row = mcp_policy_service.activate(db, version=version, actor_id=current_user.id)
+    except ValueError as exc:
+        raise api_error(400, "MCP 策略激活失败", code="MCP_POLICY_ACTIVATE_INVALID", detail=str(exc)) from exc
+    return {"id": row.id, "version": row.version, "status": row.status, "activated_at": row.activated_at}
+
+
+@router.get("/mcp-policies/replay/{run_id}")
+def replay_mcp_policy(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user),
+):
+    from app.services.agent.mcp_policy_service import mcp_policy_service
+
+    _ = current_user
+    return mcp_policy_service.replay_run(db, run_id=run_id)
+
+
+@router.get("/agent-evals/candidates")
+def list_agent_eval_candidates(
+    status: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user),
+):
+    from app.services.agent.online_eval_service import online_eval_service
+
+    _ = current_user
+    rows = online_eval_service.list_candidates(db, status=status, limit=limit)
+    return [
+        {
+            "id": row.id,
+            "agent_run_id": row.agent_run_id,
+            "trace_id": row.trace_id,
+            "failure_type": row.failure_type,
+            "status": row.status,
+            "goal_hash": row.goal_hash,
+            "evidence_json": row.evidence_json,
+            "review_note": row.review_note,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/agent-evals/candidates/{candidate_id}/approve")
+def approve_agent_eval_candidate(
+    candidate_id: int,
+    req: AgentEvalReviewRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user),
+):
+    from app.services.agent.online_eval_service import online_eval_service
+
+    try:
+        row = online_eval_service.approve(
+            db,
+            candidate_id=candidate_id,
+            reviewer_id=current_user.id,
+            evaluation_input=req.evaluation_input,
+            expected_outcome=req.expected_outcome,
+            review_note=req.review_note,
+        )
+    except ValueError as exc:
+        raise api_error(
+            400, "Agent 评测样本审核失败", code="AGENT_EVAL_REVIEW_INVALID", detail=str(exc)
+        ) from exc
+    return {"id": row.id, "status": row.status, "approved_at": row.approved_at}
+
+
+@router.post("/agent-evals/candidates/{candidate_id}/reject")
+def reject_agent_eval_candidate(
+    candidate_id: int,
+    req: AgentEvalRejectRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user),
+):
+    from app.services.agent.online_eval_service import online_eval_service
+
+    try:
+        row = online_eval_service.reject(
+            db, candidate_id=candidate_id, reviewer_id=current_user.id, review_note=req.review_note
+        )
+    except ValueError as exc:
+        raise api_error(
+            404, "Agent 评测样本不存在", code="AGENT_EVAL_CANDIDATE_NOT_FOUND", detail=str(exc)
+        ) from exc
+    return {"id": row.id, "status": row.status}
+
+
+@router.post("/agent-evals/export")
+def export_agent_eval_dataset(
+    db: Session = Depends(get_db), current_user: User = Depends(require_admin_user)
+):
+    from app.services.agent.online_eval_service import online_eval_service
+
+    _ = current_user
+    return online_eval_service.export_approved(db)
 
 
 @router.post("/oplogs")

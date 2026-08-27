@@ -27,6 +27,7 @@ from app.services.agent.agent_audit import (
     EVENT_RUN_STATE_CHANGED,
     agent_audit_service,
 )
+from app.services.agent.agent_observability import observe_agent_run, record_state_transition
 from app.services.agent.agent_harness_service import get_harness_profile
 from app.services.agent.agent_json import extract_json_object as _extract_json_object
 from app.services.agent.agent_json import json_dumps as _json_dumps
@@ -345,6 +346,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         *,
         trace_id: str | None = None,
         organization_id: int | None = None,
+        agent_type: str | None = None,
+        parent_run_id: int | None = None,
+        delegation_id: str | None = None,
     ) -> AgentRun:
         agent_run = self._repo.create_run(
             db,
@@ -353,6 +357,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             session_id=session_id,
             trace_id=trace_id,
             organization_id=organization_id,
+            agent_type=agent_type,
+            parent_run_id=parent_run_id,
+            delegation_id=delegation_id,
         )
         run_deadline = utc_now() + timedelta(seconds=self.settings.AGENT_RUN_DEADLINE_SECONDS)
         agent_run.run_deadline_at = run_deadline
@@ -399,7 +406,48 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         }
 
     def _save_run(self, db: Session, agent_run: AgentRun, **fields) -> AgentRun:
-        return self._repo.save_run(db, agent_run, **fields)
+        previous_status = agent_run.status
+        saved = self._repo.save_run(db, agent_run, **fields)
+        target_status = fields.get("status")
+        record_state_transition(
+            run_id=saved.id,
+            trace_id=saved.trace_id,
+            from_status=previous_status,
+            to_status=target_status,
+        )
+        if target_status == "error":
+            try:
+                from app.services.agent.online_eval_service import online_eval_service
+
+                online_eval_service.capture_failure(
+                    db,
+                    run_id=saved.id,
+                    trace_id=saved.trace_id,
+                    user_id=saved.user_id,
+                    organization_id=saved.organization_id,
+                    failure_type="run_error",
+                    goal=saved.goal,
+                    evidence={
+                        "status": target_status,
+                        "failure_reason": saved.failure_reason,
+                        "total_steps": saved.total_steps,
+                    },
+                )
+            except Exception:
+                db.rollback()
+        return saved
+
+    @staticmethod
+    def _sync_a2a_delegation(db: Session, agent_run: AgentRun) -> None:
+        """Reflect a delegated child Run's lifecycle into the A2A ledger."""
+        if not agent_run.delegation_id:
+            return
+        try:
+            from app.services.agent.a2a_service import a2a_collaboration_service
+
+            a2a_collaboration_service.sync_from_child_run(db=db, child_run=agent_run)
+        except Exception:  # noqa: BLE001 - audit projection must not alter Run outcome
+            db.rollback()
 
     @staticmethod
     def _load_workflow_snapshot(agent_run: AgentRun) -> dict[str, Any]:
@@ -793,22 +841,51 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         session_id: int | None = None,
         max_steps: int = 5,
         event_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        *,
+        existing_run: AgentRun | None = None,
+        forced_worker_agent: str | None = None,
     ) -> AgentRun:
-        trace_id = new_trace_id()
         # 长流程权限快照：Agent 执行期间权限范围保持稳定，硬撤销立即终止。
         from app.services.org.authorization_service import authorization_service
 
         user_row = db.query(User).filter(User.id == user_id).first()
-        organization_id = user_row.organization_id if user_row else None
-        agent_run = self._create_run(
-            goal=goal,
-            user_id=user_id,
-            session_id=session_id,
-            db=db,
-            trace_id=trace_id,
-            organization_id=organization_id,
-        )
-        if user_row:
+        if not user_row:
+            raise ValueError("Agent user not found")
+        forced_worker = canonical_agent_type(forced_worker_agent or "") if forced_worker_agent else None
+        if forced_worker and forced_worker not in AGENT_REGISTRY:
+            raise ValueError("Forced worker is not a registered Worker")
+
+        if existing_run:
+            if existing_run.user_id != user_id:
+                raise ValueError("Existing Agent run belongs to a different user")
+            if existing_run.status != "running":
+                raise ValueError("Existing Agent run is not dispatchable")
+            if forced_worker and existing_run.agent_type and canonical_agent_type(existing_run.agent_type) != forced_worker:
+                raise ValueError("Forced worker does not match delegated Agent run")
+            if existing_run.authorization_snapshot_id:
+                authorization_service.assert_snapshot(
+                    db, existing_run.authorization_snapshot_id, user_id=user_id
+                )
+            agent_run = existing_run
+            trace_id = agent_run.trace_id or new_trace_id()
+            organization_id = agent_run.organization_id
+            if not agent_run.trace_id:
+                agent_run.trace_id = trace_id
+                db.add(agent_run)
+                db.commit()
+                db.refresh(agent_run)
+        else:
+            trace_id = new_trace_id()
+            organization_id = user_row.organization_id
+            agent_run = self._create_run(
+                goal=goal,
+                user_id=user_id,
+                session_id=session_id,
+                db=db,
+                trace_id=trace_id,
+                organization_id=organization_id,
+                agent_type="supervisor_agent",
+            )
             try:
                 ctx = authorization_service.build_context(db, user_row)
                 snapshot_id = authorization_service.capture_snapshot(db, user_row, ctx)
@@ -823,6 +900,18 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         selected_skill = resolve_agent_skill(goal)
         harness_profile = get_harness_profile()
         supervisor_plan = await self._plan_with_supervisor(goal, user_id)
+        if forced_worker:
+            supervisor_plan.update(
+                {
+                    "workers": [forced_worker],
+                    "dependencies": [],
+                    "execution_mode": "sequential",
+                    "parallel_plan": None,
+                    "plan_source": "a2a_delegation",
+                    "fallback_reason": None,
+                    "rationale": "A2A 控制面已将任务委派给具备最小权限的指定 Worker。",
+                }
+            )
         supervisor_plan["harness"] = harness_profile
         supervisor_plan["selected_skill"] = selected_skill
         worker_plan = supervisor_plan["workers"]
@@ -914,8 +1003,17 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         self._save_workflow_snapshot(state, node="decide")
 
         try:
-            final_state = await self._workflow.ainvoke(state)
-            return final_state.get("final_run") or agent_run
+            with observe_agent_run(
+                run_id=agent_run.id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                max_steps=max_steps,
+            ):
+                final_state = await self._workflow.ainvoke(state)
+            result_run = final_state.get("final_run") or agent_run
+            self._sync_a2a_delegation(db, result_run)
+            return result_run
         except Exception as exc:
             safe_error = _sanitize_agent_error_message(str(exc))
             result_run = self._save_run(
@@ -960,6 +1058,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             )
             if getattr(exc, "status_code", None) is not None:
                 raise
+            self._sync_a2a_delegation(db, result_run)
             return result_run
 
     def _rebuild_messages_from_logs(
@@ -1007,6 +1106,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             run = self.get_run(approval.agent_run_id or 0, db, user_id=user_id)
             if not run:
                 raise ValueError("Agent run not found")
+            self._sync_a2a_delegation(db, run)
             return run
         if not approval.agent_run_id:
             raise ValueError("Approval request is not bound to a run")
@@ -1030,6 +1130,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                     db, agent_run, status="partial",
                     final_answer="执行已超时，待审批操作未执行，请重新发起。",
                 )
+                self._sync_a2a_delegation(db, agent_run)
                 raise ValueError("Agent run deadline exceeded; pending approval not executed")
 
         run_payload = _json_loads_dict(agent_run.result)
@@ -1243,8 +1344,12 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         if state["step"] >= max_steps:
             state["awaiting_approval"] = False
             partial_state = await self._workflow_partial(state)
-            return partial_state.get("final_run") or agent_run
+            result_run = partial_state.get("final_run") or agent_run
+            self._sync_a2a_delegation(db, result_run)
+            return result_run
         final_state = await self._workflow.ainvoke(state)
-        return final_state.get("final_run") or agent_run
+        result_run = final_state.get("final_run") or agent_run
+        self._sync_a2a_delegation(db, result_run)
+        return result_run
 
 agent_service = AgentService()

@@ -1,5 +1,6 @@
-from pydantic import BaseModel, ConfigDict
 from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DocumentBase(BaseModel):
@@ -113,6 +114,46 @@ class DocumentVisualAnalyzeOut(BaseModel):
     file_type: str
     analysis: str
     image_count: int = 1
+
+
+class DocumentMultimodalAnalyzeRequest(BaseModel):
+    """扫描合同版面分析参数。页码为 1-based，未传表示整份文档。"""
+
+    use_vision_model: bool | None = None
+    force: bool = False
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+
+
+class DocumentEvidenceLocateRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class DocumentMultimodalAnalyzeOut(BaseModel):
+    document_id: int
+    version_number: int
+    parser_version: str
+    vision_model: str | None = None
+    page_count: int
+    ocr_confidence: float
+    review_required: bool
+    pages: list[dict] = []
+    regions: list[dict] = []
+    tables: list[dict] = []
+    clauses: list[dict] = []
+    warnings: list[dict] = []
+    replayed: bool | None = None
+
+
+class DocumentEvidenceLocateOut(BaseModel):
+    document_id: int
+    query: str
+    matches: list[dict] = []
+    analysis_available: bool
+    ocr_confidence: float | None = None
+    review_required: bool = False
+    message: str | None = None
 
 
 class KnowledgeBaseOut(BaseModel):

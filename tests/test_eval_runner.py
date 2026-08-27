@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from eval.bundle_utils import load_bundle_meta, resolve_eval_paths
-from eval.run_eval import answer_hit, collect_badcases, run_eval
+from eval.run_eval import _normalize_expected_evidence, answer_hit, collect_badcases, run_eval
 
 
 class EvalRunnerTests(unittest.TestCase):
@@ -223,6 +223,52 @@ class EvalRunnerTests(unittest.TestCase):
         badcases = collect_badcases(cases)
 
         self.assertEqual([item["name"] for item in badcases], ["bad1", "bad2"])
+
+    def test_run_eval_reports_rank_metrics_evidence_coverage_and_categories(self):
+        dataset = [
+            {
+                "name": "multi_evidence",
+                "category": "payment",
+                "question": "What are the two payment milestones?",
+                "expected_evidence": [
+                    {"id": "advance", "keywords": ["advance", "1 million"], "match": "all"},
+                    {"id": "acceptance", "keywords": ["acceptance", "2 million"], "match": "all"},
+                ],
+                "should_refuse": False,
+            }
+        ]
+        response = {
+            "answer": "The milestones are 1 million in advance and 2 million after acceptance.",
+            "citations": [
+                {"source_text": "advance payment: 1 million"},
+                {"source_text": "acceptance payment: 2 million"},
+            ],
+            "hit_chunks": [
+                {"content": "unrelated introduction"},
+                {"content": "advance payment: 1 million"},
+                {"content": "acceptance payment: 2 million"},
+            ],
+            "confidence": 0.82,
+            "can_answer": True,
+        }
+
+        with patch("eval.run_eval.agentic_rag_service.answer", return_value=response):
+            result = run_eval(dataset, user_id=7, top_k=5, confidence_threshold=0.35)
+
+        self.assertEqual(result["cases"][0]["first_relevant_rank"], 2)
+        self.assertEqual(result["cases"][0]["retrieval_evidence_coverage"], 1.0)
+        self.assertEqual(result["summary"]["mrr"], 0.5)
+        self.assertGreater(result["summary"]["ndcg_at_5"], 0.0)
+        self.assertEqual(result["summary"]["retrieval_evidence_coverage"], 1.0)
+        self.assertEqual(result["summary"]["citation_evidence_coverage"], 1.0)
+        self.assertEqual(result["category_summary"]["payment"]["total_cases"], 1)
+
+    def test_expected_evidence_defaults_to_original_keyword_annotation(self):
+        evidence = _normalize_expected_evidence(
+            {"expected_chunk_keywords": ["payment", "1 million"], "expected_chunk_match": "all"}
+        )
+
+        self.assertEqual(evidence, [{"id": "default", "keywords": ["payment", "1 million"], "match": "all"}])
 
     def test_run_eval_marks_citation_miss_as_badcase(self):
         dataset = [

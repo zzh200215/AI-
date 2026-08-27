@@ -31,6 +31,10 @@ class LLMSettings(BaseSettings):
     LLM_REQUEST_TIMEOUT_SECONDS: int = Field(default=60, ge=5, le=180)
     LLM_MODEL_FALLBACK_ENABLED: bool = True
     LLM_SMALL_MODEL_FALLBACK_TO_PRIMARY: bool = True
+    # 模型发布控制面：发布规则本身存储在 model_releases，凭据始终只来自环境/密钥服务。
+    # 候选模型未单独配 Key 时复用 LLM_API_KEY；不要把任何密钥写进发布记录。
+    LLM_MODEL_RELEASES_ENABLED: bool = True
+    LLM_CANARY_API_KEY: str = ""
     LLM_ROUTING_ALERT_MIN_REQUESTS: int = Field(default=10, ge=1, le=10000)
     LLM_ROUTING_ALERT_PRIMARY_FAILURE_RATE: float = Field(default=0.2, ge=0.0, le=1.0)
     LLM_ROUTING_ALERT_FALLBACK_FAILURE_RATE: float = Field(default=0.3, ge=0.0, le=1.0)

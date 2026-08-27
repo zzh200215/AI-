@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+
 from app.core.database import Base
 
 
@@ -25,6 +26,11 @@ class AgentRun(Base):
     # 可观测性与租户隔离：run 级 trace_id 与所属组织。
     trace_id = Column(String(64), nullable=True, index=True)
     organization_id = Column(Integer, nullable=True, index=True)
+    # A2A 谱系：顶层 Run 由 supervisor_agent 发起；子 Run 始终继承父 Run 的
+    # 用户、组织、trace 与授权快照，不能借委派获得更宽权限。
+    agent_type = Column(String(64), nullable=True, index=True)
+    parent_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True, index=True)
+    delegation_id = Column(String(64), nullable=True, unique=True, index=True)
     run_deadline_at = Column(DateTime(timezone=True), nullable=True)
     retry_of_run_id = Column(Integer, nullable=True)
     compensation_status = Column(String(32), nullable=True)
@@ -73,6 +79,8 @@ class AgentApprovalRequest(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
     revoke_reason = Column(Text, nullable=True)
+    policy_version = Column(String(64), nullable=True, index=True)
+    data_scope = Column(String(64), nullable=True)
 
 
 class AgentAuditEvent(Base):
@@ -96,3 +104,38 @@ class AgentAuditEvent(Base):
     status = Column(String(32), nullable=True)
     duration_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class A2ADelegation(Base):
+    """Internal A2A control-plane record.
+
+    The task body stays on the child ``AgentRun`` under the same authorization
+    boundary. This ledger deliberately stores only a redacted summary and a
+    content hash so audit replay does not become a second copy of legal data.
+    """
+
+    __tablename__ = "a2a_delegations"
+    __table_args__ = (
+        UniqueConstraint("parent_run_id", "idempotency_key", name="uq_a2a_delegations_parent_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    delegation_id = Column(String(64), nullable=False, unique=True, index=True)
+    parent_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=False, index=True)
+    child_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True, unique=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    organization_id = Column(Integer, nullable=True, index=True)
+    trace_id = Column(String(64), nullable=True, index=True)
+    authorization_snapshot_id = Column(String(64), nullable=True, index=True)
+    from_agent_type = Column(String(64), nullable=False, index=True)
+    to_agent_type = Column(String(64), nullable=False, index=True)
+    task_type = Column(String(64), nullable=False, default="analysis")
+    status = Column(String(32), nullable=False, default="accepted", index=True)
+    idempotency_key = Column(String(128), nullable=True)
+    input_hash = Column(String(64), nullable=False, index=True)
+    task_summary_json = Column(Text, nullable=True)
+    result_summary_json = Column(Text, nullable=True)
+    error_code = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)

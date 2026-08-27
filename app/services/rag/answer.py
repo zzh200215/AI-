@@ -12,6 +12,7 @@ import time
 
 from app.core.config import get_settings
 from app.services.llm.llm_observability_service import llm_observability_service
+from app.services.rag.trace import TRACE_VERSION, query_summary
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -61,10 +62,12 @@ class AnswerMixin:
         retrieval_duration_ms: int = 0,
         generation_duration_ms: int = 0,
         runtime_config: dict | None = None,
+        retrieval_trace: dict | None = None,
+        degradation_reason: str | None = None,
     ) -> dict:
         latency_ms = int((time.time() - started) * 1000)
         rerank_duration_ms = max(latency_ms - retrieval_duration_ms - generation_duration_ms, 0)
-        return {
+        response = {
             "answer": answer,
             "citations": citations,
             "confidence": round(max(0.0, min(confidence, 1.0)), 2),
@@ -82,9 +85,20 @@ class AnswerMixin:
                 "citation_count": len(citations),
                 "result_status": "answered" if can_answer else "refused",
                 "refusal_reason": refusal_reason,
+                "degradation_reason": (
+                    degradation_reason
+                    or ((retrieval_trace or {}).get("retrieval") or {}).get("rerank_status") == "fallback"
+                    and "rerank_unavailable"
+                    or refusal_reason
+                ),
+                "trace_version": TRACE_VERSION,
             },
             "runtime_config": runtime_config or self.get_runtime_config(),
         }
+        if retrieval_trace:
+            response["retrieval_trace"] = retrieval_trace
+            response["observability"]["retrieval_trace"] = retrieval_trace
+        return response
 
     def _record_pipeline_log(
         self,
@@ -103,11 +117,12 @@ class AnswerMixin:
             duration_ms=result.get("latency_ms"),
             user_id=user_id,
             request_excerpt={
-                "query": query,
+                "query_sha256": query_summary(query)["sha256"],
+                "query_length": len(query or ""),
                 "document_id": document_id,
                 **runtime_config,
             },
-            response_excerpt=observability,
+            response_excerpt={**observability, "retrieval_trace": result.get("retrieval_trace")},
         )
 
     def _build_prompt_context(self, chunks: list[dict]) -> str:

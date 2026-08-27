@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.time import utc_now
+from app.mcp.policy import DEFAULT_POLICY_DOCUMENT
 from app.models.agent import AgentApprovalRequest
 
 # 审批状态
@@ -47,13 +48,15 @@ def param_digest(params: dict) -> str:
 
 class AgentApprovalService:
     HIGH_RISK_TOOLS = {
-        "task_create_tool": "high",
-        # Even read-only SQL can expose organization-wide sensitive data.
-        "sql_query_tool": "high",
+        str(rule["tool"]): str(rule["risk_level"])
+        for rule in DEFAULT_POLICY_DOCUMENT["rules"]
+        if rule.get("requires_approval")
     }
 
     def requires_approval(self, tool_name: str) -> bool:
-        return tool_name in self.HIGH_RISK_TOOLS
+        from app.mcp.policy import policy_engine
+
+        return policy_engine.evaluate(agent_type="general_agent", tool_name=tool_name).requires_approval
 
     def create_request(
         self,
@@ -65,6 +68,9 @@ class AgentApprovalService:
         agent_type: str,
         agent_run_id: int | None = None,
         step_id: int | None = None,
+        risk_level: str | None = None,
+        policy_version: str | None = None,
+        data_scope: str | None = None,
     ) -> AgentApprovalRequest:
         expires_at = utc_now() + timedelta(seconds=get_settings().AGENT_APPROVAL_EXPIRE_SECONDS)
         request = AgentApprovalRequest(
@@ -73,12 +79,14 @@ class AgentApprovalService:
             tool_name=tool_name,
             agent_type=agent_type,
             input_params=json.dumps(input_params, ensure_ascii=False, sort_keys=True),
-            risk_level=self.HIGH_RISK_TOOLS.get(tool_name, "high"),
+            risk_level=risk_level or self.HIGH_RISK_TOOLS.get(tool_name, "high"),
             status=STATUS_PENDING,
             approval_token=secrets.token_hex(16),
             step_id=step_id,
             param_digest=param_digest(input_params),
             expires_at=expires_at,
+            policy_version=policy_version,
+            data_scope=data_scope,
         )
         db.add(request)
         db.commit()

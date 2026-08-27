@@ -134,6 +134,9 @@ LLM_FALLBACK_REQUEST_RETRIES=1
 LLM_REQUEST_TIMEOUT_SECONDS=60
 LLM_MODEL_FALLBACK_ENABLED=true
 LLM_SMALL_MODEL_FALLBACK_TO_PRIMARY=true
+# 版本化模型灰度：规则由管理员 API 存储，候选密钥只从部署环境读取。
+LLM_MODEL_RELEASES_ENABLED=true
+LLM_CANARY_API_KEY=
 LLM_ROUTING_ALERT_MIN_REQUESTS=10
 LLM_ROUTING_ALERT_PRIMARY_FAILURE_RATE=0.20
 LLM_ROUTING_ALERT_FALLBACK_FAILURE_RATE=0.30
@@ -143,6 +146,8 @@ LLM_MODEL_PRICING={"qwen-plus":{"input_per_1k":0.004,"output_per_1k":0.012}}
 ```
 
 模型降级只针对连接、读取超时、协议异常和服务端 5xx：主模型失败后切换小模型；短请求的小模型失败可回切主模型。4xx 参数/鉴权错误以及本地限流、Token 预算拒绝不会绕过治理。流式回答只有在第一个输出分片前失败时才切换模型。
+
+模型升级使用 `model_releases` 的版本化发布记录，不直接替换 `LLM_MODEL`。候选模型需经过离线评测门禁后才可获得服务流量；A/B 分桶、Shadow Traffic、线上错误率/p95/成本门禁和回滚说明见 `docs/MODEL_ROUTING_AND_ROLLOUT.md`。候选模型定价缺失时，成本约束会拒绝其获得流量。
 
 管理员可通过 `GET /api/analytics/llm-routing/stats` 查看路由后的运行统计：小模型首选命中率、主模型初次调用失败率、降级次数与成功率、按模型成本占比，以及按 action 的尝试平均耗时。统计依赖迁移 `20260730_0051` 后新增的调用日志字段；迁移前的历史日志保留可查，但不会纳入这些路由指标。
 

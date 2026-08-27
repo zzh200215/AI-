@@ -30,6 +30,9 @@ chroma_db/
 .tmp_run/
 .reasonix/
 
+# Firecrawl CLI 输出（求职/检索等临时数据，勿混入仓库）
+.firecrawl/
+
 # Env
 .env
 .env.*

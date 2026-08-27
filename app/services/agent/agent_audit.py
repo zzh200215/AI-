@@ -13,8 +13,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.time import utc_now
-from app.models.agent import AgentAuditEvent
 from app.mcp.schema import trim_sensitive_args
+from app.models.agent import AgentAuditEvent
 
 # 事件类型常量
 EVENT_RUN_STATE_CHANGED = "run_state_changed"
@@ -29,6 +29,14 @@ EVENT_TIMEOUT = "timeout"
 EVENT_CANCEL = "cancel"
 EVENT_COMPENSATION = "compensation"
 EVENT_ERROR = "error"
+EVENT_RETRIEVAL_RESULT = "retrieval_result"
+EVENT_A2A_DELEGATION_CREATED = "a2a_delegation_created"
+EVENT_A2A_DELEGATION_ACCEPTED = "a2a_delegation_accepted"
+EVENT_A2A_DELEGATION_DISPATCHED = "a2a_delegation_dispatched"
+EVENT_A2A_DELEGATION_AWAITING_APPROVAL = "a2a_delegation_awaiting_approval"
+EVENT_A2A_DELEGATION_COMPLETED = "a2a_delegation_completed"
+EVENT_A2A_DELEGATION_FAILED = "a2a_delegation_failed"
+EVENT_A2A_DELEGATION_DENIED = "a2a_delegation_denied"
 
 
 class AgentAuditService:

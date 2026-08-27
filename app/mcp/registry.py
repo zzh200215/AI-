@@ -23,14 +23,13 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.mcp.permissions import (
-    agent_allows_tool,
-    allowed_tools_for,
-)
+from app.mcp.permissions import allowed_tools_for
+from app.mcp.policy import policy_engine
 from app.mcp.schema import tool_to_mcp_spec, trim_sensitive_args, validate_tool_args
 from app.services.agent.agent_approval_service import agent_approval_service
 from app.tools.base import BaseAgentTool
@@ -38,7 +37,6 @@ from app.tools.document_tool import DocumentConflictTool, DocumentRiskTool, Docu
 from app.tools.legal_tool import LegalConsultationTool, LegalContractReviewTool, LegalDraftTool
 from app.tools.sql_tool import SQLTool
 from app.tools.task_tool import TaskCreateTool, TaskQueryTool
-
 
 # ── Tool catalogue ─────────────────────────────────────────────────────
 # Central registry of every tool instance.  Adding a new tool here makes
@@ -103,9 +101,9 @@ class MCPRegistry:
         """Return every known tool as an MCP tool spec."""
         return [tool_to_mcp_spec(t) for t in _TOOL_INSTANCES.values()]
 
-    def list_tools_for(self, agent_type: str) -> list[dict[str, Any]]:
+    def list_tools_for(self, agent_type: str, db: Session | None = None) -> list[dict[str, Any]]:
         """Return only the tools that ``agent_type`` is allowed to call."""
-        allowed = sorted(allowed_tools_for(agent_type))
+        allowed = sorted(policy_engine.allowed_tools_for(agent_type, db))
         return [
             tool_to_mcp_spec(_TOOL_INSTANCES[name])
             for name in allowed
@@ -156,8 +154,15 @@ class MCPRegistry:
             )
 
         # ── 2. Permission check ──────────────────────────────────────
-        if not agent_allows_tool(agent_type, tool_name):
-            allowed = sorted(allowed_tools_for(agent_type))
+        declared_contract = getattr(tool, "contract", None)
+        policy = policy_engine.evaluate(
+            agent_type=agent_type,
+            tool_name=tool_name,
+            db=db,
+            contract=declared_contract if declared_contract is not None else None,
+        )
+        if not policy.allowed:
+            allowed = sorted(allowed_tools_for(agent_type, db=db))
             return self._error_response(
                 MCP_ERR_PERMISSION_DENIED,
                 f"Agent '{agent_type}' is not allowed to call '{tool_name}'",
@@ -165,6 +170,10 @@ class MCPRegistry:
                     "agent_type": agent_type,
                     "requested_tool": tool_name,
                     "allowed_tools": allowed,
+                    "policy_version": policy.policy_version,
+                    "rule_id": policy.rule_id,
+                    "data_scope": policy.data_scope,
+                    "risk_level": policy.risk_level,
                 },
             )
 
@@ -179,7 +188,7 @@ class MCPRegistry:
         #      fields like user_id/db are required by the schema)  ──
         try:
             validate_tool_args(tool, merged)
-        except Exception as exc:
+        except Exception:
             return self._error_response(
                 MCP_ERR_VALIDATION,
                 "工具参数校验失败",
@@ -190,7 +199,7 @@ class MCPRegistry:
             not skip_approval
             and db is not None
             and user_id is not None
-            and agent_approval_service.requires_approval(tool_name)
+            and policy.requires_approval
         ):
             approval = agent_approval_service.create_request(
                 db=db,
@@ -199,6 +208,9 @@ class MCPRegistry:
                 input_params=trim_sensitive_args(merged),
                 agent_type=agent_type,
                 agent_run_id=agent_run_id,
+                risk_level=policy.risk_level,
+                policy_version=policy.policy_version,
+                data_scope=policy.data_scope,
             )
             return {
                 "success": False,
@@ -223,7 +235,7 @@ class MCPRegistry:
         try:
             raw = await tool.run(**merged)
             result = tool.normalize_result(raw)
-        except Exception as exc:
+        except Exception:
             duration_s = time.time() - started
             result = {
                 "success": False,

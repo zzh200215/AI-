@@ -73,11 +73,17 @@ def requires_approval_for(tool_name: str, contract: ToolContract | None) -> bool
     保持向后兼容：未迁移的 legacy 工具/测试 FakeTool 仍按既有名称策略判定，
     已声明契约的写工具一律需审批。
     """
-    if contract is not None and contract.name and contract.requires_approval is not None:
+    from app.mcp.policy import policy_engine
+
+    # ``DEFAULT_CONTRACT`` represents a legacy/test tool without a declared
+    # contract. Do not let its fail-closed write defaults override the
+    # versioned MCP policy for a tool that already has an explicit rule.
+    has_declared_contract = contract is not None and bool(contract.name)
+    if has_declared_contract and contract.requires_approval is not None:
         return contract.requires_approval
-    if contract is not None and contract.name and not contract.read_only:
+    if has_declared_contract and not contract.read_only:
         return True
     # 回退：既有 AgentApprovalService.HIGH_RISK_TOOLS
-    from app.services.agent.agent_approval_service import agent_approval_service
-
-    return agent_approval_service.requires_approval(tool_name)
+    return policy_engine.evaluate(
+        agent_type="general_agent", tool_name=tool_name
+    ).requires_approval

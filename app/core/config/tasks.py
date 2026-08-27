@@ -19,6 +19,8 @@ class TaskSettings(BaseSettings):
     AGENT_TOOL_BACKOFF_BASE_SECONDS: int = Field(default=2, ge=1, le=60)
     AGENT_APPROVAL_EXPIRE_SECONDS: int = Field(default=3600, ge=60, le=604800)
     AGENT_TOOL_IDEMPOTENCY_ENABLED: bool = Field(default=True)
+    # 内部 A2A 控制面：防止 Agent 递归委派放大资源与权限风险。
+    A2A_MAX_DELEGATION_DEPTH: int = Field(default=3, ge=1, le=10)
 
     # 文档处理任务：重试策略与 lease（租约）回收
     DOCUMENT_TASK_MAX_RETRIES: int = Field(default=2, ge=0, le=10)

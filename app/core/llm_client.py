@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.core.response_cache import build_response_cache
 from app.core.structured_output import build_repair_prompt, normalize_schema, parse_structured_output
 from app.services.llm.llm_governance_service import LLMGovernanceError, llm_governance_service
 from app.services.llm.llm_outbound_gate import BLOCK_CODE, OutboundGateResult, outbound_gate
+from app.services.llm.model_release_service import ModelReleaseDecision, model_release_service
 
 settings = get_settings()
 OPENAI_COMPATIBLE_EMBED_BATCH_SIZE = 10
@@ -45,6 +47,15 @@ class _ModelTarget:
     provider: str
     base_url: str
     api_key: str
+
+
+@dataclass(frozen=True)
+class _RoutePlan:
+    """Serving route plus an optional fire-and-forget shadow comparison target."""
+
+    targets: tuple[_ModelTarget, ...]
+    decision: ModelReleaseDecision | None = None
+    shadow_target: _ModelTarget | None = None
 
 ACTION_PROMPT_TEMPLATE_MAP = {
     "document_summary": "document_summary",
@@ -118,10 +129,8 @@ class ModelGateway:
             aclose = getattr(client, "aclose", None)
             if aclose is None:
                 continue
-            try:
+            with suppress(Exception):
                 await aclose()
-            except Exception:
-                pass
 
     async def shutdown(self) -> None:
         """lifespan 关闭入口；等价于 close。"""
@@ -221,10 +230,7 @@ class ModelGateway:
                         parts.append({"type": "text", "text": str(item.get("text") or "")})
                     elif item_type == "image_url":
                         image_url = item.get("image_url")
-                        if isinstance(image_url, dict):
-                            url = str(image_url.get("url") or "")
-                        else:
-                            url = str(image_url or "")
+                        url = str(image_url.get("url") or "") if isinstance(image_url, dict) else str(image_url or "")
                         if url:
                             parts.append({"type": "image_url", "image_url": {"url": url}})
                 normalized.append({"role": role, "content": parts})
@@ -472,15 +478,21 @@ class ModelGateway:
         pii_hit_codes: str | None = None,
         pii_hit_count: int = 0,
         redacted_count: int = 0,
+        model_release_version: str | None = None,
+        experiment_bucket: int | None = None,
+        traffic_type: str | None = None,
+        routing_reason: str | None = None,
+        request_complexity: str | None = None,
+        risk_level: str | None = None,
+        billable: bool = True,
     ):
         try:
-            from app.core.database import SessionLocal
-            from app.models.llm_call_log import LLMCallLog
-            from app.services.llm.prompt_service import prompt_service
-            from app.services.billing.token_service import token_service
-
             # P0 出站审计：请求级上下文（API/Celery headers 传播）补齐租户/链路标识。
+            from app.core.database import SessionLocal
             from app.core.obs_context import get_context
+            from app.models.llm_call_log import LLMCallLog
+            from app.services.billing.token_service import token_service
+            from app.services.llm.prompt_service import prompt_service
 
             obs_ctx = get_context()
 
@@ -496,17 +508,18 @@ class ModelGateway:
 
             db = SessionLocal()
             try:
-                token_service.record(
-                    model=model,
-                    db=db,
-                    user_id=user_id,
-                    action=action,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    duration_ms=duration_ms,
-                    budget_category=budget_category,
-                    attempt_number=attempt_number,
-                )
+                if billable:
+                    token_service.record(
+                        model=model,
+                        db=db,
+                        user_id=user_id,
+                        action=action,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        duration_ms=duration_ms,
+                        budget_category=budget_category,
+                        attempt_number=attempt_number,
+                    )
                 db.add(
                     LLMCallLog(
                         user_id=user_id,
@@ -529,6 +542,12 @@ class ModelGateway:
                         organization_id=obs_ctx.org_id,
                         routing_role=routing_role,
                         routing_stage=routing_stage,
+                        model_release_version=model_release_version,
+                        experiment_bucket=experiment_bucket,
+                        traffic_type=traffic_type,
+                        routing_reason=routing_reason,
+                        request_complexity=request_complexity,
+                        risk_level=risk_level,
                         error_message=sanitize_observability_error_message(action, error_message),
                         request_excerpt=sanitize_observability_excerpt(action, request_excerpt, kind="request"),
                         response_excerpt=sanitize_observability_excerpt(action, response_excerpt, kind="response"),
@@ -620,6 +639,71 @@ class ModelGateway:
             targets.append(alternate)
         return self._filter_available_targets(targets, policy.task)
 
+    def _target_from_release(self, decision: ModelReleaseDecision) -> _ModelTarget:
+        provider = decision.candidate_provider or self.primary_target.provider
+        base_url = self._resolve_base_url(
+            provider=provider,
+            configured_url=decision.candidate_base_url or "",
+        ).rstrip("/")
+        # Candidate credentials must remain in deployment secret storage.  A dedicated
+        # secret is optional so same-provider upgrades can safely reuse the primary key.
+        api_key = str(settings.LLM_CANARY_API_KEY or "").strip() or self.primary_target.api_key
+        return _ModelTarget(
+            role="canary",
+            model=decision.candidate_model,
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+        )
+
+    def _build_route_plan(self, *, source_text: str, request: ModelRequest, policy: TaskPolicy | None = None) -> _RoutePlan:
+        policy = policy or get_task_policy(request.action)
+        baseline_targets = self._candidate_targets(source_text, request.action, policy=policy)
+        baseline_model = baseline_targets[0].model if baseline_targets else self.primary_target.model
+        decision = model_release_service.resolve(
+            action=request.action,
+            source_text=source_text,
+            data_level=request.data_level,
+            latency_budget_ms=int(self._policy_timeout(policy) * 1000),
+            user_id=request.user_id,
+            request_id=request.request_id,
+            baseline_model=baseline_model,
+            estimated_input_tokens=request.estimated_input_tokens,
+            estimated_output_tokens=request.estimated_output_tokens,
+        )
+        if not decision:
+            return _RoutePlan(targets=tuple(baseline_targets))
+
+        candidate = self._target_from_release(decision)
+        candidate_available = self.circuit_breaker.can_attempt(self._circuit_key(candidate, policy.task))
+        if decision.serve_candidate and candidate_available:
+            targets = [candidate]
+            if policy.fallback_enabled and settings.LLM_MODEL_FALLBACK_ENABLED:
+                targets.extend(target for target in baseline_targets if not self._same_target(target, candidate))
+            return _RoutePlan(targets=tuple(targets), decision=decision)
+        shadow_target = candidate if decision.shadow_candidate and candidate_available else None
+        return _RoutePlan(targets=tuple(baseline_targets), decision=decision, shadow_target=shadow_target)
+
+    @staticmethod
+    def _release_log_fields(
+        decision: ModelReleaseDecision | None,
+        *,
+        traffic_type: str = "serving",
+    ) -> dict[str, str | int | None]:
+        if decision is None:
+            return {"traffic_type": traffic_type}
+        return {
+            "model_release_version": decision.release_version,
+            "experiment_bucket": decision.bucket,
+            "traffic_type": traffic_type,
+            "routing_reason": decision.reason,
+            "request_complexity": decision.signals.complexity,
+            "risk_level": decision.signals.risk_level,
+        }
+
+    def _cache_model_for_plan(self, plan: _RoutePlan, *, fallback_model: str) -> str:
+        return plan.targets[0].model if plan.targets else fallback_model
+
     def _cache_model(self, source_text: str, action: str) -> str:
         """按路由规则解析将使用的模型名，作为缓存键的"模型不可变版本"锚点。"""
         return self._select_text_target(source_text, action).model
@@ -681,8 +765,11 @@ class ModelGateway:
         policy: TaskPolicy,
         routing_stage: str,
         attempt_number: int = 1,
+        decision: ModelReleaseDecision | None = None,
+        traffic_type: str = "serving",
+        billable: bool = True,
     ) -> str:
-        is_chat = request.request_type == "chat"
+        is_chat = request.request_type in {"chat", "chat_stream"}
         temperature = self._resolve_temperature(policy, request.temperature)
         max_tokens = policy.max_tokens
         request_excerpt = json.dumps(request.messages, ensure_ascii=False) if is_chat else str(request.prompt or "")
@@ -714,6 +801,8 @@ class ModelGateway:
                 estimated_output_tokens=request.estimated_output_tokens,
                 data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
                 pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                billable=billable,
+                **self._release_log_fields(decision, traffic_type=traffic_type),
             )
             raise
         self.circuit_breaker.record_success(circuit_key)
@@ -731,12 +820,61 @@ class ModelGateway:
             estimated_output_tokens=request.estimated_output_tokens,
             data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
             pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+            billable=billable,
+            **self._release_log_fields(decision, traffic_type=traffic_type),
         )
         return response_excerpt
 
-    async def _request_text_with_routing(self, *, source_text: str, request: ModelRequest) -> str:
+    async def _run_shadow_request(
+        self,
+        *,
+        target: _ModelTarget,
+        request: ModelRequest,
+        policy: TaskPolicy,
+        decision: ModelReleaseDecision,
+    ) -> None:
+        try:
+            await self._request_text_once(
+                target=target,
+                request=request,
+                policy=policy,
+                routing_stage="shadow",
+                attempt_number=1,
+                decision=decision,
+                traffic_type="shadow",
+                billable=False,
+            )
+        except Exception:
+            # The comparison is intentionally non-blocking and may not change the served result.
+            return
+
+    def _schedule_shadow_request(
+        self,
+        *,
+        target: _ModelTarget | None,
+        request: ModelRequest,
+        policy: TaskPolicy,
+        decision: ModelReleaseDecision | None,
+    ) -> None:
+        if target is None or decision is None:
+            return
+        task = asyncio.create_task(
+            self._run_shadow_request(target=target, request=request, policy=policy, decision=decision)
+        )
+        # Consume unexpected task-level errors defensively; _run_shadow_request already
+        # handles provider failures, but cancellation must never leak to the request task.
+        task.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
+
+    async def _request_text_with_routing(
+        self,
+        *,
+        source_text: str,
+        request: ModelRequest,
+        route_plan: _RoutePlan | None = None,
+    ) -> str:
         policy = get_task_policy(request.action)
-        targets = self._candidate_targets(source_text, request.action, policy=policy)
+        plan = route_plan or self._build_route_plan(source_text=source_text, request=request, policy=policy)
+        targets = plan.targets
         if not targets:
             raise self._circuit_open_error(
                 task=policy.task, request_id=request.request_id, trace_id=request.trace_id,
@@ -744,13 +882,22 @@ class ModelGateway:
         last_error: Exception | None = None
         for index, target in enumerate(targets):
             try:
-                return await self._request_text_once(
+                response = await self._request_text_once(
                     target=target,
                     request=request,
                     policy=policy,
                     routing_stage="initial" if index == 0 else "fallback",
                     attempt_number=index + 1,
+                    decision=plan.decision,
+                    traffic_type="serving",
                 )
+                self._schedule_shadow_request(
+                    target=plan.shadow_target,
+                    request=request,
+                    policy=policy,
+                    decision=plan.decision,
+                )
+                return response
             except Exception as exc:
                 last_error = exc
                 if index == len(targets) - 1 or not classify_error(exc).retryable:
@@ -788,18 +935,24 @@ class ModelGateway:
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
         )
+        source_text = self._messages_to_text(safe_messages)
+        route_plan = self._build_route_plan(source_text=source_text, request=request)
         cache_key = None
         if cacheable and not stream and settings.LLM_RESPONSE_CACHE_ENABLED:
             policy = get_task_policy(action)
             cache_key = self._cache_key(
                 task=policy.task, request=request,
-                model=self._cache_model(self._messages_to_text(safe_messages), action),
+                model=self._cache_model_for_plan(
+                    route_plan, fallback_model=self._cache_model(source_text, action),
+                ),
                 permission_fingerprint=permission_fingerprint,
             )
             cached = self.response_cache.get(cache_key)
             if cached is not None:
                 return cached
-        raw = await self._request_text_with_routing(source_text=self._messages_to_text(safe_messages), request=request)
+        raw = await self._request_text_with_routing(
+            source_text=source_text, request=request, route_plan=route_plan,
+        )
         if cache_key is not None:
             self.response_cache.put(cache_key, raw)
         return raw
@@ -834,18 +987,23 @@ class ModelGateway:
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
         )
+        route_plan = self._build_route_plan(source_text=safe_prompt, request=request)
         cache_key = None
         if cacheable and settings.LLM_RESPONSE_CACHE_ENABLED:
             policy = get_task_policy(action)
             cache_key = self._cache_key(
                 task=policy.task, request=request,
-                model=self._cache_model(safe_prompt, action),
+                model=self._cache_model_for_plan(
+                    route_plan, fallback_model=self._cache_model(safe_prompt, action),
+                ),
                 permission_fingerprint=permission_fingerprint,
             )
             cached = self.response_cache.get(cache_key)
             if cached is not None:
                 return cached
-        raw = await self._request_text_with_routing(source_text=safe_prompt, request=request)
+        raw = await self._request_text_with_routing(
+            source_text=safe_prompt, request=request, route_plan=route_plan,
+        )
         if cache_key is not None:
             self.response_cache.put(cache_key, raw)
         return raw
@@ -896,11 +1054,14 @@ class ModelGateway:
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
         )
+        route_plan = self._build_route_plan(source_text=safe_prompt, request=request, policy=policy)
         cache_key = None
         if cacheable and settings.LLM_RESPONSE_CACHE_ENABLED:
             cache_key = self._cache_key(
                 task=policy.task, request=request,
-                model=self._cache_model(safe_prompt, action),
+                model=self._cache_model_for_plan(
+                    route_plan, fallback_model=self._cache_model(safe_prompt, action),
+                ),
                 permission_fingerprint=permission_fingerprint,
                 schema=spec.json_schema,
             )
@@ -909,7 +1070,9 @@ class ModelGateway:
                 cached_data, _ = parse_structured_output(cached, spec)
                 if cached_data is not None:
                     return cached_data
-        raw = await self._request_text_with_routing(source_text=safe_prompt, request=request)
+        raw = await self._request_text_with_routing(
+            source_text=safe_prompt, request=request, route_plan=route_plan,
+        )
         data, failure_kind = parse_structured_output(raw, spec)
         if data is not None:
             if cache_key is not None:
@@ -1091,7 +1254,9 @@ class ModelGateway:
         resolved_temperature = self._resolve_temperature(policy, request.temperature)
         max_tokens = policy.max_tokens
         request_excerpt = json.dumps(safe_messages, ensure_ascii=False)
-        targets = self._candidate_targets(self._messages_to_text(safe_messages), action, policy=policy)
+        source_text = self._messages_to_text(safe_messages)
+        route_plan = self._build_route_plan(source_text=source_text, request=request, policy=policy)
+        targets = route_plan.targets
         if not targets:
             raise self._circuit_open_error(
                 task=policy.task, request_id=request.request_id, trace_id=request.trace_id,
@@ -1145,6 +1310,7 @@ class ModelGateway:
                                 estimated_output_tokens=request.estimated_output_tokens,
                                 data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
                                 pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                                **self._release_log_fields(route_plan.decision),
                             )
                             return
                     except Exception as exc:
@@ -1167,6 +1333,7 @@ class ModelGateway:
                     estimated_output_tokens=request.estimated_output_tokens,
                     data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
                     pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                    **self._release_log_fields(route_plan.decision),
                 )
                 raise
 
@@ -1176,6 +1343,12 @@ class ModelGateway:
                 async for chunk in stream_from_target(target, "initial" if index == 0 else "fallback", attempt_number=index + 1):
                     emitted = True
                     yield chunk
+                self._schedule_shadow_request(
+                    target=route_plan.shadow_target,
+                    request=request,
+                    policy=policy,
+                    decision=route_plan.decision,
+                )
                 return
             except Exception as exc:
                 # 已输出内容后不能无缝切换模型，否则会造成重复或前后文不一致。

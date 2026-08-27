@@ -34,6 +34,7 @@ SENSITIVE_FIELDS = frozenset(
         "SECRET_KEY",
         "LLM_API_KEY",
         "LLM_SMALL_MODEL_API_KEY",
+        "LLM_CANARY_API_KEY",
         "CONNECTOR_CREDENTIAL_ENCRYPTION_KEY",
         "LDAP_BIND_PASSWORD",
         "WECOM_SECRET",

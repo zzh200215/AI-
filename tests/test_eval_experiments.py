@@ -273,6 +273,7 @@ class EvalExperimentRunnerTests(unittest.TestCase):
                     },
                     "summary": {
                         "hit_at_k": 0.95,
+                        "mrr": 0.75,
                         "citation_accuracy": 0.8,
                         "refusal_accuracy": 1.0,
                         "badcase_count": 2,
@@ -297,6 +298,7 @@ class EvalExperimentRunnerTests(unittest.TestCase):
                 },
                 "summary": {
                     "hit_at_k": 1.0,
+                    "mrr": 0.9,
                     "citation_accuracy": 0.9,
                     "refusal_accuracy": 1.0,
                     "badcase_count": 1,
@@ -308,6 +310,7 @@ class EvalExperimentRunnerTests(unittest.TestCase):
 
         self.assertTrue(comparison["regression_detected"])
         self.assertEqual(comparison["regressions"][0]["metric"], "hit_at_k")
+        self.assertTrue(any(item["metric"] == "mrr" for item in comparison["regressions"]))
         self.assertTrue(any(item["metric"] == "citation_accuracy" for item in comparison["regressions"]))
         self.assertTrue(any(item["metric"] == "badcase_count" for item in comparison["regressions"]))
         self.assertTrue(any(item["field"] == "context_neighbor_window" for item in comparison["config_drift"]))

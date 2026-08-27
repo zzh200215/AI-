@@ -1,29 +1,46 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+import json
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
 from app.core.api_response import api_error, paginated_payload, should_passthrough_exception
+from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models.agent import AgentRun
 from app.models.user import User
 from app.schemas.agent import (
+    A2AAuditEventOut,
+    A2AAuditReplayOut,
+    A2ADelegationOut,
+    A2ADelegationRequest,
     AgentApprovalDecisionRequest,
-    AgentApprovalResumeRequest,
-    AgentRunCancelRequest,
     AgentApprovalRequestOut,
+    AgentApprovalResumeRequest,
     AgentPlanPreviewRequest,
     AgentPlanPreviewResponse,
+    AgentRunCancelRequest,
     AgentRunDetailOut,
     AgentRunHistoryOut,
     AgentRunRequest,
     AgentRunResponse,
     ToolCallLogOut,
 )
+from app.services.agent.a2a_service import A2ADelegationError, a2a_collaboration_service
 from app.services.agent.agent_approval_service import agent_approval_service
-from app.services.agent.agent_registry import AGENT_REGISTRY_VERSION, TASK_PROTOCOL_VERSION, get_supervisor_registration, list_agent_registrations
 from app.services.agent.agent_harness_service import get_harness_profile
-from app.services.agent.agent_skill_registry import SKILL_REGISTRY_VERSION, get_agent_skill, list_agent_skills, resolve_agent_skill
+from app.services.agent.agent_registry import (
+    AGENT_REGISTRY_VERSION,
+    TASK_PROTOCOL_VERSION,
+    get_supervisor_registration,
+    list_agent_registrations,
+)
 from app.services.agent.agent_service import agent_service
+from app.services.agent.agent_skill_registry import (
+    SKILL_REGISTRY_VERSION,
+    get_agent_skill,
+    list_agent_skills,
+    resolve_agent_skill,
+)
 from app.services.observability.oplog_service import oplog_service
 
 router = APIRouter()
@@ -49,9 +66,58 @@ def _serialize_run(run: AgentRun, logs=None) -> AgentRunDetailOut:
         failure_reason=run.failure_reason,
         total_steps=run.total_steps,
         error=run.error,
+        agent_type=run.agent_type,
+        parent_run_id=run.parent_run_id,
+        delegation_id=run.delegation_id,
         created_at=run.created_at,
         completed_at=run.completed_at,
         logs=[_serialize_log(item) for item in (logs or [])],
+    )
+
+
+def _json_object(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _serialize_delegation(delegation) -> A2ADelegationOut:
+    return A2ADelegationOut(
+        delegation_id=delegation.delegation_id,
+        parent_run_id=delegation.parent_run_id,
+        child_run_id=delegation.child_run_id,
+        from_agent_type=delegation.from_agent_type,
+        to_agent_type=delegation.to_agent_type,
+        task_type=delegation.task_type,
+        status=delegation.status,
+        trace_id=delegation.trace_id,
+        authorization_snapshot_bound=bool(delegation.authorization_snapshot_id),
+        input_hash=delegation.input_hash,
+        task_summary=_json_object(delegation.task_summary_json),
+        result_summary=_json_object(delegation.result_summary_json),
+        error_code=delegation.error_code,
+        created_at=delegation.created_at,
+        accepted_at=delegation.accepted_at,
+        completed_at=delegation.completed_at,
+    )
+
+
+def _serialize_a2a_audit_event(event) -> A2AAuditEventOut:
+    return A2AAuditEventOut(
+        id=event.id,
+        run_id=event.run_id,
+        step=event.step,
+        trace_id=event.trace_id,
+        event_type=event.event_type,
+        status=event.status,
+        error_category=event.error_category,
+        decision=_json_object(event.decision_json),
+        summary=_json_object(event.summary_json),
+        created_at=event.created_at,
     )
 
 
@@ -116,6 +182,30 @@ def get_agent_registry(current_user: User = Depends(get_current_user)):
     }
 
 
+@router.get("/cards")
+def list_agent_cards(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """A2A Agent Card discovery for the authenticated internal control plane."""
+    _ = current_user
+    return {
+        "protocol_version": "0.3.0",
+        "registry_version": AGENT_REGISTRY_VERSION,
+        "items": a2a_collaboration_service.list_agent_cards(db=db),
+    }
+
+
+@router.get("/cards/{agent_type}")
+def get_agent_card(
+    agent_type: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ = current_user
+    card = a2a_collaboration_service.build_agent_card(agent_type=agent_type, db=db)
+    if not card:
+        raise api_error(404, "Agent Card 不存在", code="A2A_AGENT_CARD_NOT_FOUND")
+    return card
+
+
 @router.get("/harness")
 def get_agent_harness(current_user: User = Depends(get_current_user)):
     """Expose the server-enforced Agent lifecycle and safety controls."""
@@ -177,6 +267,8 @@ def list_runs(
             final_answer=(run.final_answer or "")[:200] or None,
             failure_reason=run.failure_reason,
             total_steps=run.total_steps,
+            agent_type=run.agent_type,
+            parent_run_id=run.parent_run_id,
             created_at=run.created_at,
             completed_at=run.completed_at,
         )
@@ -187,6 +279,79 @@ def list_runs(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.post("/runs/{run_id}/delegations", response_model=A2ADelegationOut)
+async def create_a2a_delegation(
+    run_id: int,
+    req: A2ADelegationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    parent_run = agent_service.get_run(run_id, db, user_id=current_user.id)
+    if not parent_run:
+        raise api_error(404, "运行记录不存在", code="AGENT_RUN_NOT_FOUND")
+    try:
+        delegation = a2a_collaboration_service.create_delegation(
+            db=db,
+            parent_run=parent_run,
+            user=current_user,
+            to_agent_type=req.to_agent_type,
+            task=req.task,
+            task_type=req.task_type,
+            idempotency_key=req.idempotency_key,
+        )
+        delegation = await a2a_collaboration_service.dispatch_delegation(
+            db=db,
+            delegation=delegation,
+            max_steps=5,
+        )
+    except A2ADelegationError as exc:
+        status_code = 403 if exc.code in {"A2A_ORGANIZATION_MISMATCH", "A2A_AUTHZ_SNAPSHOT_INVALID"} else 409
+        if exc.code in {"A2A_TARGET_NOT_FOUND", "A2A_TASK_INVALID"}:
+            status_code = 400
+        raise api_error(status_code, "A2A 委派失败", code=exc.code, detail=str(exc)) from exc
+    oplog_service.log(
+        module="agent",
+        action="a2a_delegation_created",
+        db=db,
+        user_id=current_user.id,
+        target_type="a2a_delegation",
+        target_id=delegation.id,
+        detail=f"parent_run_id={parent_run.id};to_agent_type={delegation.to_agent_type}",
+    )
+    return _serialize_delegation(delegation)
+
+
+@router.get("/runs/{run_id}/delegations", response_model=list[A2ADelegationOut])
+def list_a2a_delegations(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    parent_run = agent_service.get_run(run_id, db, user_id=current_user.id)
+    if not parent_run:
+        raise api_error(404, "运行记录不存在", code="AGENT_RUN_NOT_FOUND")
+    return [
+        _serialize_delegation(item)
+        for item in a2a_collaboration_service.list_delegations(db, parent_run_id=parent_run.id)
+    ]
+
+
+@router.get("/runs/{run_id}/a2a-audit", response_model=A2AAuditReplayOut)
+def get_a2a_audit_replay(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    run = agent_service.get_run(run_id, db, user_id=current_user.id)
+    if not run:
+        raise api_error(404, "运行记录不存在", code="AGENT_RUN_NOT_FOUND")
+    delegations, events = a2a_collaboration_service.audit_replay(db=db, run_id=run.id)
+    return A2AAuditReplayOut(
+        delegations=[_serialize_delegation(item) for item in delegations],
+        events=[_serialize_a2a_audit_event(item) for item in events],
     )
 
 

@@ -52,6 +52,13 @@ class StorageSettings(BaseSettings):
     OCR_PDF_RENDER_DPI: int = 200
     OCR_MIN_TEXT_LENGTH: int = 24
     OCR_MIN_READABLE_RATIO: float = 0.45
+    # 多模态合同解析：低于该词级置信度的 OCR 结果进入人工复核。
+    OCR_MIN_WORD_CONFIDENCE: float = Field(default=0.65, ge=0.0, le=1.0)
+    OCR_LOW_CONFIDENCE_RATIO: float = Field(default=0.25, ge=0.0, le=1.0)
+    OCR_REVIEW_CONFIDENCE: float = Field(default=0.78, ge=0.0, le=1.0)
+    # 版面分析最多处理的页数，避免超大扫描合同阻塞请求；0 表示不限制。
+    MULTIMODAL_MAX_PAGES: int = Field(default=80, ge=0, le=10000)
+    MULTIMODAL_USE_VISION_MODEL: bool = True
 
     # 会议录音转写（faster-whisper）
     MEETING_ASR_ENABLED: bool = True

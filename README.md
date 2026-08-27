@@ -1,491 +1,237 @@
-# 律智检｜法律文书与合同审查智能体平台
+# 律智检
 
-基于 FastAPI、Vue、Chroma / Qdrant、Neo4j、Celery 和千问兼容 API 的法律辅助工作台。平台聚焦三条核心业务线：
+> 面向企业法务与律师团队的法律文书、合同审查和知识检索工作台。
 
-- **法律咨询辅助**：案情分类、事实整理、法源定位、一般处理建议
-- **合同智能审查**：条款风险识别、原文证据定位、修改建议、冲突核对
-- **法律文书草稿**：劳动仲裁、民间借贷、消费纠纷、补充协议四类模板，字段校验与待补事实标注
+律智检将法律咨询、合同风险审查、文书草稿、法规与案例检索、律师审核，以及受控的 Agent 执行收敛到同一套工作流中。系统面向真实业务资料设计：敏感数据在出站前经过分级与脱敏，写入型操作需要按策略审批，检索、工具调用和 Agent 决策均可审计回放。
 
-## 产品定位
+![律智检登录页](docs/images/login.png)
 
-面向个人用户与小型律所的法律检索、合同审查和文书辅助平台。通过 Agentic RAG、多智能体协作和律师审核机制，降低法律依据定位与关键事实遗漏风险。
+![登录后的法律工作台首页](docs/images/home-onboarding.png)
 
-**重要边界**：平台定位为法律辅助工具，不提供自动法律结论或律师替代服务。所有输出均标注"AI 辅助结果"，高风险事项强制进入律师审核队列。
+## 能力概览
 
-## 核心特性
+| 领域 | 已实现能力 |
+| --- | --- |
+| 法律工作台 | 法律咨询、合同审查、文书草稿、案件归档、律师审核、计时计费、关键日期与客户门户。 |
+| 法律知识库 | 文档上传、版本管理、解析、向量检索、BM25、重排序、Agentic RAG、引用与法源有效性核验。 |
+| 扫描合同理解 | 版面感知 OCR、置信度校验、印章/签字区域识别、表格与条款抽取、证据页码和坐标定位；可选择调用视觉模型辅助识别。 |
+| Agent 编排 | Supervisor/Worker 执行、工具调用、敏感操作审批、幂等控制、Run 历史，以及受约束的内部 A2A 委派。 |
+| 可观测与评测 | OpenTelemetry Trace、结构化 Agent 审计、线上失败样本候选集、人工脱敏审核、评测导出与回归门禁。 |
+| 模型治理 | 按复杂度、风险、延迟与成本进行模型路由；支持 Shadow Traffic、稳定分桶 A/B、离线评测门禁和自动/人工回滚。 |
 
-### 1. 法律咨询辅助
+## 治理与安全
 
-- 问题自动分类：劳动争议、合同纠纷、民间借贷、消费纠纷、其他
-- 已知事实与待补事实分离，不编造关键信息
-- 法规检索与引用定位，支持法规、司法解释、公开案例摘要
-- 高风险提示：刑事、人身损害、时效临近、证据不足自动标记
-- 多轮追问支持，保留上下文
+- **Policy-as-Code**：MCP 工具权限、可访问数据域、风险级别与审批要求由可版本化策略定义。策略决策带 Agent 身份、规则版本和结果，可重放并识别策略漂移。
+- **最小权限与动态授权**：Agent 每次调用工具都重新校验当前授权；缺少数据域、超过风险阈值或审批未通过时默认拒绝。
+- **可审计的 Agent 运行**：`agent.run`、`agent.tool_call`、`agent.retrieval` 与 `agent.state_transition` Trace 仅记录有界元数据，不写入请求正文、检索原文或模型输出。
+- **线上评测闭环**：失败 Run 或工具失败会生成脱敏候选；管理员提供专门编写的评测输入与预期结果后，样本才进入版本化评测集和 CI 回归门禁。
+- **受控 A2A 协作**：内部 Agent Card、任务委派和跨 Agent 审计继承父 Run 的用户、组织、Trace 与授权快照。当前实现不将本地 Agent 暴露为未经配置的远程执行端点。
+- **法律数据保护**：出站 LLM 调用统一经过数据分级、PII 检测与脱敏；极敏感数据默认阻断。密钥、连接器凭据和法律数据采用独立密钥配置。
 
-### 2. 合同智能审查
+## 架构
 
-- 八类条款风险识别：付款、交付、违约、赔偿、保密、知识产权、终止、争议解决
-- 原文证据定位，展示段落、页码、条款编号
-- 风险等级分层：高 / 中 / 低 / 待补充事实
-- 合同对比功能：核对签订日期、金额、责任方、违约条款等 10 项关键字段
-- 支持 PDF、DOCX、图片合同上传与 OCR 解析
+项目采用模块化单体：Vue 3 提供法律工作台，FastAPI 提供 HTTP/WebSocket API；业务能力按领域组织在服务层中。MySQL 保存事务、版本和审计数据，Redis 支撑缓存、限流与任务协调，Celery 承担文档处理、索引、通知和运营任务，Chroma 或 Qdrant 提供向量检索。
 
-### 3. 法律文书草稿
+```mermaid
+flowchart TB
+    User[律师 / 企业法务 / 管理员 / 客户] --> Web[Vue 3 法律工作台]
+    Web -->|REST / WebSocket| Api[FastAPI API 层]
 
-支持四类文书模板：
-- 劳动争议仲裁申请书
-- 民间借贷纠纷起诉状
-- 消费纠纷投诉书
-- 补充协议
+    Api --> Legal[法律工作台服务]
+    Api --> Doc[文档服务]
+    Api --> Agent[Agent 编排服务]
+    Api --> RAG[RAG 检索服务]
+    Api --> Admin[运营与治理服务]
 
-必填字段校验：姓名、金额、日期、地址、请求事项、证据材料不允许留空或自行编造，缺失项明确标记【待补充】。
+    Legal --> Mysql[(MySQL)]
+    Doc --> Storage[本地或对象存储]
+    Doc --> Queue[Celery 队列]
+    RAG --> Vector[(Chroma / Qdrant)]
+    RAG --> Llm[LLM / Embedding / Vision Provider]
+    Agent --> MCP[MCP 策略与工具执行]
+    Agent --> Llm
+    Admin --> Mysql
 
-### 4. 律师审核闭环
-
-- 审核队列：待审核咨询、合同、文书草稿
-- 四类审核动作：通过、退回补充事实、转线下咨询、归档
-- 审核记录留痕：审核人、时间、意见、版本
-- 权限控制：仅管理员和审核律师可执行审核动作
-- 审核反馈回流：通过/退回决策落库，用于生成质量评测闭环（AI-2）
-
-### 5. 飞书插件（企业自建应用）
-
-平台核心能力通过飞书机器人复用，飞书端仅做适配层，后端零新功能：
-
-- **M1 单聊咨询**：@插件发文本 → 咨询分类卡片（风险等级/法条引用/待补充事实/追问入口）
-- **M2 合同初筛**：单聊发 `.pdf/.docx` → 风险条款卡片 + 深度审查入口
-- **M3 文书生成 + 审核队列**：模板表单 → 草稿卡片；"待审核"命令 → 逐项卡片 → 通过/退回回写 Web 审核队列
-- **M4 提醒管线**：每日 09:00 beat 任务 → 激活引导卡 / 周报回访卡
-- 回调安全：AES-256-CBC 事件解密 + HMAC 签名校验（V2/V1 兼容，`FEISHU_CALLBACK_VERIFY=auto`）
-
-接入指南见 [docs/feishu-app-integration-guide.md](docs/feishu-app-integration-guide.md)。
-
-### 6. 客户门户（POC 交付）
-
-面向客户的只读门户，按组织隔离：
-
-- 链接时效：默认 30 天过期，拒绝访问可追踪
-- 品牌化：律所 logo + 自定义欢迎语
-- 访问行为分析：去重访客 / 重复访问 / 活跃天数 / 时段分布（并入周报口径）
-- 客户反馈：👍/👎 + 待改进说明
-- 账单对账：账单摘要 / 已收 / 应付款日
-
-### 7. 订阅与计费
-
-- 三级计划：free / pro / team，额度与上限配置化（`FREE_PLAN_*_QUOTA`）
-- 升级意图埋点（`upgrade_intent` oplog），支撑 M-3 转化 A/B 实验
-- 对公转账支付流程 + 发票快照；Stripe webhook HMAC 验签（可选）
-- 过期自动流转、发票逾期扫描、订阅到期扫描（beat 任务）
-
-### 8. 文档处理与文件生命周期
-
-- **存储抽象**：统一 `object_key`，支持 Local / MinIO / S3 / OSS 适配器，按配置选择后端，不散落本地路径
-- **处理状态机**：`uploaded → parsing → parsed → indexing → indexed`，失败/重试/恢复全程可审计，并发 worker 不重复处理或回退
-- **流式安全上传**：分块读写限大小、真实 MIME 检测（扩展名×magic-byte 交叉校验）、MIME 白名单、zip-bomb 防护（只读中央目录）、病毒扫描抽象（未配置不伪造扫描结果）
-- **任务幂等与租约**：parse/chunk/index 分步幂等（版本+内容哈希指纹），DB 条件更新 + 租约（lease）回收，worker 崩溃/超时可安全接管
-- **内容去重与可重建性**：content_hash 去重；版本/解析器/分块器/索引器版本变化触发重建，旧产物自动失效
-
-### 9. Agent 统一执行与安全治理
-
-- **单一工具执行链**：Planner 只规划，PermissionGuard 校验权限，ToolExecutor 统一执行（超时/取消/重试/幂等/审计），LangGraph 与 fallback 引擎共用同一节点链路
-- **写工具审批**：审批绑定 run/step/参数摘要/操作者/过期时间，审批后改参必须重新审批；过期/撤销不可执行
-- **Agent Run 生命周期**：暂停/恢复/取消/超时/补偿，集中状态机校验合法转移
-- **结构化审计**：`agent_audit_events` 记录计划决策、权限决策、工具执行、审批、状态变更、重试/超时/取消/补偿与错误分类（脱敏摘要）
-- **SQLTool 只读加固**：sqlglot AST 级解析（仅单条 SELECT/WITH-SELECT），schema/表白名单、敏感列脱敏、行数/字节上限、独立只读账号校验
-
-## 安全与合规（等保二级对标）
-
-平台按 GB/T 22239-2019 第二级要求实现并自评（见 docs/etc-protection-poc-self-assessment.md）：
-
-| 域 | 实现 |
-|---|---|
-| 身份鉴别 | 密码 bcrypt + 全站 HTTPS/TLS + JWT；客户门户 OTP 一次性验证码 |
-| 访问控制 | 角色四级 RBAC + 资源级鉴权 + 门户按组织隔离 |
-| 数据保密 | 敏感字段 AES-256-GCM 静态加密（独立密钥）；LLM 出站 PII 脱敏；邮件 DLP |
-| 安全审计 | 操作/审计/登录双轨日志 + 集中检索 `/api/admin/logs/search` + 结构化 JSON 导出（`STRUCTURED_LOG_JSON_LINES`） |
-| 备份恢复 | Celery beat 每日 02:00 全量备份 + SHA256 校验 + 异地副本（`BACKUP_OFFSITE_DIR`）+ 保留策略（`BACKUP_RETENTION_COUNT`） |
-| 登录防护 | 5 次失败锁定 30 分钟 |
-| 合规材料 | 隐私政策/用户协议/供应商清单/数据保留 SLA/制度汇编/应急预案/任命文件（草案，待法务确认） |
-
-## 可观测性
-
-- **Sentry**：前端与 API 错误上报（`SENTRY_DSN`，可留空关闭）
-- **OpenTelemetry**：FastAPI 请求 + SQLAlchemy 链路追踪 → OTLP collector（`OTEL_ENABLED` + `OTEL_EXPORTER_OTLP_ENDPOINT`，`https://` 前缀自动启用 TLS）
-- **告警**：Webhook 告警（`ALERT_WEBHOOK_URL`）+ 模型路由健康检查
-- **成本核算**：按 token 用量记账，日额度/速率治理
-
-## 技术架构
-
-### 后端技术栈
-
-- **FastAPI**：异步 API 服务
-- **SQLAlchemy + MySQL / PostgreSQL / SQLite**：元数据与业务台账（生产建议 MySQL/PostgreSQL）
-- **Celery + Redis**：异步任务与计划任务（beat：每日备份、提醒、到期扫描、告警等 16 个计划任务）；任务按 `llm/document/connector/notification/billing` 五队列隔离，双 worker 消费，分布式锁互斥、外部调用统一韧性层 + DB 级幂等
-- **sqlglot**：SQLTool 只读安全边界（AST 级解析与白名单）
-- **Chroma（默认）/ Qdrant**：向量检索
-- **千问 / Ollama**：LLM 推理与向量化（qwen-plus 主模型 + 简单请求路由小模型）
-- **OpenTelemetry + Sentry**：链路追踪与错误上报（可选开关）
-- **AES-256-GCM**：敏感字段静态加密
-
-### 前端技术栈
-
-- **Vue 3 + TypeScript**
-- **Element Plus**：UI 组件库（按需导入）
-- **Vite**：构建工具
-
-### 核心技术机制
-
-- **Agentic RAG**：问题分类 → 查询改写 → 混合检索 → 证据评估 → 有限轮次补检索 → 带引用回答或拒答
-- **Graph RAG（可选）**：Neo4j 基于法源修订关系、法律领域和条文关系为已召回候选提供可解释的排序证据；图谱不可用时自动降级至原检索链路
-- **多 Agent 协作**：按法律业务领域拆分 Agent（法律咨询、合同审查、法律文书、证据校验），而非技术步骤拆分
-- **统一工具执行链**：Planner → PermissionGuard → ToolExecutor（超时/取消/重试/幂等/审计），所有工具（含 MCP server）经单一执行器，写操作必须审批
-- **SQL 只读安全边界**：sqlglot AST 解析 + 白名单 + 脱敏 + 只读账号，拒绝非 SELECT/多语句/越权/危险函数
-- **结构化输出**：使用 JSON Schema 约束合同风险、咨询建议、文书字段和审核动作
-- **人机协同**：高风险结论、文书交付和对外动作均进入律师审核或用户确认
-- **PII 脱敏**：敏感信息（身份证、手机号、姓名）在送入 LLM 前自动脱敏
-
-## 环境要求
-
-- Python 3.11
-- Node.js 20+
-- MySQL 8 / PostgreSQL 15+
-- Redis 7
-- 通义千问 API Key
-
-默认按千问 OpenAI 兼容接口接入。如需本地 Ollama，可把 `LLM_PROVIDER` 切成 `ollama`。
-
-```bash
-LLM_PROVIDER=openai_compatible
-LLM_API_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=你的百炼 API Key
-LLM_MODEL=qwen-plus
-LLM_VISION_MODEL=qwen-vl-max
-EMBEDDING_MODEL=text-embedding-v3
-VITE_WS_HOST=localhost:8001
+    Queue --> Worker[Celery Worker / Beat]
+    Worker --> Doc
+    Worker --> Redis[(Redis)]
+    Api --> Redis
+    Api --> OTel[OpenTelemetry / 审计事件]
+    Agent --> OTel
 ```
 
-飞书插件、客户门户、支付网关、Sentry/OTel 均为可选，未配置时对应功能自动降级（见 docs/CONFIG.md）。
+### 分层与边界
+
+| 层 | 职责 | 主要目录 |
+| --- | --- | --- |
+| 表现层 | HTTP、WebSocket、认证、请求响应与 OpenAPI 契约。 | `app/api/`、`frontend/src/` |
+| 业务层 | 法律工作台、文档、RAG、Agent、计费、通知和组织等领域服务。 | `app/services/` |
+| 领域与数据层 | SQLAlchemy 模型、Pydantic DTO、数据访问和版本控制。 | `app/models/`、`app/schemas/`、`app/repositories/` |
+| 基础设施层 | 配置、数据库、缓存、LLM 网关、加密、遥测、错误处理。 | `app/core/` |
+| 执行层 | MCP 工具策略与执行、Celery 异步任务。 | `app/mcp/`、`app/tasks/` |
+
+后端只允许 `API -> Service -> Model/Repository -> Core` 的单向依赖；任务层可调用业务服务，但业务服务不反向依赖任务框架。详细边界见 [架构基线](docs/ARCHITECTURE.md)。
+
+### 法律文档与检索链路
+
+```mermaid
+flowchart LR
+    Upload[上传 PDF / DOCX / 图片] --> Scan[安全检查与版本管理]
+    Scan --> Parse[文本 / OCR / 版面解析]
+    Parse --> Multi[多模态分析: 印章、签字、表格、条款]
+    Parse --> Chunk[切分与元数据提取]
+    Chunk --> Index[向量索引 + BM25 索引]
+    Index --> Retrieve[混合召回 + RRF + 重排序]
+    Retrieve --> Evidence[引用、页码、bbox 证据定位]
+    Evidence --> Answer[带依据的法律咨询 / 合同审查 / 文书草稿]
+    Answer --> Review[律师审核与版本留痕]
+```
+
+文档版本与多模态分析结果按版本持久化，避免新上传内容覆盖历史证据。OCR 置信度不足、缺少 Tesseract 或视觉模型失败时，系统会以可解释告警降级，而非把空结果当作可靠结论。
+
+### Agent 治理闭环
+
+```mermaid
+flowchart LR
+    Goal[用户目标] --> Plan[Supervisor 规划]
+    Plan --> Policy{MCP Policy-as-Code}
+    Policy -->|允许| Tool[Worker / 工具调用]
+    Policy -->|需审批| Approval[人工审批]
+    Approval -->|通过| Tool
+    Approval -->|拒绝| Stop[拒绝并记录]
+    Tool --> Run[Run 状态机与结果]
+    Run --> Trace[Trace + 审计事件]
+    Trace --> Candidate[失败样本候选]
+    Candidate --> ReviewEval[人工脱敏审核]
+    ReviewEval --> Dataset[版本化评测集]
+    Dataset --> Gate[CI 回归门禁]
+    Gate --> Release[模型 / 提示词 / 策略发布]
+```
+
+这个闭环将线上失败信号转为经过人工控制的评测样本，并把策略、模型和提示词变化置于同一回归门禁下。生产请求正文不会自动进入评测集。
 
 ## 快速启动
 
-### 1. 安装依赖
+### 前置条件
 
-```bash
-# 后端
+- Python 3.11
+- Node.js 20+
+- MySQL 8 和 Redis 7，或 Docker Compose
+- 可用的 OpenAI 兼容模型 API Key；扫描件增强识别还需按部署环境安装 Tesseract，并配置 `LLM_VISION_MODEL`（可选）
+
+### 1. 配置环境变量
+
+基于示例创建 `.env`，至少填入数据库、Redis、管理员账号、应用密钥、法律数据加密密钥和 LLM 配置。
+
+```powershell
+Copy-Item .env.example .env
+```
+
+重点检查：`DATABASE_URL`、`REDIS_URL`、`SECRET_KEY`、`LEGAL_DATA_ENCRYPTION_KEY`、`LLM_API_KEY`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`。Docker Compose 还需要 `DATABASE_URL_DOCKER` 与 `MYSQL_ROOT_PASSWORD`。
+
+完整变量说明见 [配置参考](docs/CONFIG.md)。不要将 `.env`、真实合同、生产导出或任何 API Key 提交到仓库。
+
+### 2. 本地开发
+
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
 
-# 前端
+python scripts/bootstrap_system.py
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+```
+
+另开一个终端启动前端：
+
+```powershell
 cd frontend
 npm ci
-cd ..
-```
-
-### 2. 配置环境变量
-
-```bash
-# 复制配置模板
-cp .env.example .env
-
-# 编辑配置文件，至少配置以下必需项：
-# - SECRET_KEY: 至少32字符的强随机密钥
-# - LLM_API_KEY: 通义千问API密钥
-# - DATABASE_URL: 数据库连接
-# - REDIS_URL: Redis连接
-# - ADMIN_USERNAME/ADMIN_PASSWORD: 管理员账号
-
-# 运行配置诊断工具检查配置
-python scripts/check_config.py
-```
-
-**详细配置说明**: 参见 [docs/CONFIG.md](docs/CONFIG.md)
-
-### 3. 初始化数据库
-
-```bash
-python scripts/bootstrap_system.py
-```
-
-该脚本会执行：
-- Alembic 数据库迁移
-- 默认 Prompt 模板初始化
-- 管理员账号创建
-- 演示法律法规与合同模板数据
-
-### 4. 启动服务
-
-```bash
-# 后端 API
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
-
-# Celery Worker（新终端，推荐双 worker：CPU 重任务 与 LLM/外发 隔离）
-celery -A app.core.celery_app.celery_app worker --loglevel=info -Q document,notification,billing,connector --concurrency=4
-celery -A app.core.celery_app.celery_app worker --loglevel=info -Q llm,connector --concurrency=2
-
-# 单 worker 兜底（本地低配环境）：消费全部 5 队列
-celery -A app.core.celery_app.celery_app worker --loglevel=info -Q llm,document,connector,notification,billing
-
-# Celery Beat（新终端，计划任务）
-celery -A app.core.celery_app.celery_app beat --loglevel=info
-
-# 前端（新终端）
-cd frontend
 npm run dev
 ```
 
-默认地址：
-- 前端：http://localhost:5173
-- 后端：http://localhost:8001
-- API 文档：http://localhost:8001/docs
-- 健康检查：http://localhost:8001/api/health
-
-## Docker Compose 启动
+访问 `http://127.0.0.1:5173`。文档解析、通知和定时任务依赖 Celery；如需一次性启动完整开发进程，请不要再手工启动上面的 API 和前端，并在准备好 MySQL 与 Redis 后运行：
 
 ```powershell
-docker compose up --build
+python scripts/start_dev_servers.py
 ```
 
-默认会启动 MySQL、Redis、API、Celery Worker、Celery Beat、前端六个服务。
+### 3. Docker Compose
 
-**注意**：
-- Docker Compose 会读取项目根目录 `.env` 中的 `LLM_API_KEY`
-- 首次启动会拉取基础镜像，耗时取决于网络
-- 当前 `frontend` 服务运行的是 Vite dev server，适合本地演示，不是生产静态托管模式
+在已完成 `.env` 配置后：
 
-## 核心 API
-
-### 法律咨询
-
-```bash
-POST /api/legal/consultations
-{
-  "question": "我在公司工作了3年，公司突然辞退我，没有支付经济补偿金，我应该怎么办？"
-}
+```powershell
+docker compose up --build -d
+docker compose ps
 ```
 
-返回：
-- 问题分类（劳动争议、合同纠纷等）
-- 已知事实与待补充事实
-- 参考法律依据（含法规名称、条文、版本）
-- 一般性处理建议
-- 风险等级（高 / 中 / 低）
+前端默认发布在 `http://127.0.0.1:8080`，API 在 `http://127.0.0.1:8001`。Compose 启动 API 时会执行系统初始化与数据库迁移。运行状态、健康检查、备份和故障处置见 [运维手册](docs/operations-runbook.md)。
 
-### 合同审查
+## 关键工作流
 
-```bash
-POST /api/legal/contract-reviews
-{
-  "title": "技术服务合同",
-  "content": "合同全文..."
-}
+### 扫描合同分析
+
+1. 上传 PDF 或图片合同并完成基础解析。
+2. 调用 `POST /api/documents/{document_id}/multimodal-analyze`，可限定页码范围或启用视觉模型辅助。
+3. 从 OCR 置信度、版面块、印章/签字区域、表格条款和风险义务行中查看结构化证据。
+4. 使用 `POST /api/documents/{document_id}/evidence-locate` 返回证据所在页、摘录、OCR 置信度和坐标。
+
+详见 [多模态法律文档理解](docs/MULTIMODAL_DOCUMENT_ANALYSIS.md)。OCR 或视觉模型不可用时，接口会明确返回降级告警，不能将空结果当作高置信度证据。
+
+### Agent 可观测与线上评测
+
+1. Agent Run、工具调用、检索与状态转移写入同一 `trace_id` 的结构化 Trace 与审计事件。
+2. 失败 Run 自动沉淀为仅含摘要和哈希的待审核候选，不复制生产法律请求。
+3. 管理员审核并编写可用于测试的输入与预期结果。
+4. 导出版本化数据集，由 `eval.agent_online_eval.run_cases` 执行回归门禁。
+
+详见 [Agent Observability and Online Evals](docs/AGENT_OBSERVABILITY_ONLINE_EVALS.md)。
+
+### 模型路由与发布
+
+文本调用先根据请求复杂度和风险选择小模型或主模型，再由发布控制面在成本、时延、能力和离线评测门禁均满足时进行影子或 A/B 流量分配。候选密钥只可由环境或密钥服务注入，不能写入发布记录。
+
+详见 [模型路由与灰度发布](docs/MODEL_ROUTING_AND_ROLLOUT.md)。
+
+## 验证
+
+```powershell
+# 后端测试
+python -m pytest tests -q
+
+# 迁移完整性
+python -B scripts/check_migrations.py
+
+# 前端构建与端到端测试
+cd frontend
+npm run build
+npm run test:e2e
 ```
 
-返回：
-- 风险清单（条款类型、风险等级、原文定位、修改建议）
-- 审查意见总结
-- 高风险项数量
+上线前的分层测试、覆盖率、OpenAPI 契约、迁移校验和性能检查见 [测试与发布工程手册](docs/TESTING_AND_RELEASE.md)。
 
-### 合同对比
+## 截图更新
 
-```bash
-POST /api/legal/contract-compare
-{
-  "title_a": "原合同",
-  "content_a": "原合同全文...",
-  "title_b": "补充协议",
-  "content_b": "补充协议全文..."
-}
+README 中的图片位于 `docs/images/`。前端服务运行在 `http://127.0.0.1:5173` 时，可用下列命令重新生成：
+
+```powershell
+cd frontend
+node scripts/capture-readme-screenshots.mjs
 ```
 
-返回：
-- 10 项关键字段对比（签订日期、金额、责任方、违约条款等）
-- 冲突标记与严重程度
-- 对比总结
+首页截图会拦截页面 API 并使用脚本内的脱敏模拟数据，因此不会读取本地数据库、生产合同或模型密钥。
 
-### 法律文书草稿
+## 进一步阅读
 
-```bash
-POST /api/legal/drafts
-{
-  "document_type": "labor_arbitration_application",
-  "fields": {
-    "申请人": "张三",
-    "被申请人": "某公司",
-    "仲裁请求": "支付经济补偿金3万元",
-    "事实与理由": "...",
-    "证据清单": "劳动合同、工资流水"
-  }
-}
-```
+| 主题 | 文档 |
+| --- | --- |
+| 架构与模块边界 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| MCP 策略、审计回放 | [MCP_POLICY_AS_CODE.md](docs/MCP_POLICY_AS_CODE.md) |
+| 内部 A2A 协作 | [A2A_COLLABORATION.md](docs/A2A_COLLABORATION.md) |
+| RAG 指标与评测 | [RAG_EVALUATION_GUIDE.md](docs/RAG_EVALUATION_GUIDE.md) / [EVAL_METRICS.md](docs/EVAL_METRICS.md) |
+| 配置与环境变量 | [CONFIG.md](docs/CONFIG.md) |
+| 发布与运维 | [operations-runbook.md](docs/operations-runbook.md) / [CANARY_AND_RELEASE.md](docs/CANARY_AND_RELEASE.md) |
 
-返回：
-- 文书草稿全文
-- 缺失字段清单（必填字段未填时标记为 needs_facts）
-- 参考法律依据
+## 使用边界
 
-### 律师审核
-
-```bash
-GET /api/legal/review-queue
-# 返回待审核的咨询、合同、文书列表
-
-POST /api/legal/review-queue/{target_type}/{target_id}/actions
-{
-  "action": "approve | return | offline | close",
-  "note": "审核意见"
-}
-```
-
-## 评测与质量保证
-
-### 评测体系
-
-项目内置多层评测（`eval/` 目录 + CI 评测回归门禁）：
-
-- **生成质量评测**：咨询/合同审查/文书字段校验样例（`eval/bundles/demo_legal/`），含引用完整率、拒答准确率、事实完整性
-- **法律检索评测**：`run_legal_retrieval_eval.py`（法源召回）
-- **混合检索 / Graph RAG 评测**：`run_hybrid_retrieval_eval.py` / `run_graph_rag_eval.py`
-- **审核反馈回流评测（AI-2）**：`run_generation_eval --review-feedback`，用真实/模拟审核决策回归生成质量
-- **模型对比（AI-6）**：`compare_models.py` / `run_experiments.py`
-- **语料评测集（AI-1）**：`eval/bundles/` 冻结题集 + `export_real_corpus_eval.py` 换真实语料
-
-生成真实业务评测集：
-
-```bash
-python eval/create_eval_bundle.py --bundle-name real_legal_q3 --pretty
-python eval/index_eval_corpus.py --bundle-dir eval/bundles/real_legal_q3 --pretty
-python eval/run_eval.py --bundle-dir eval/bundles/real_legal_q3 --user-id 9000 --pretty
-```
-
-### 核心指标
-
-- **引用完整率**：咨询建议和合同风险是否附带有效法源引用
-- **拒答准确率**：无依据、高风险、证据不足时是否正确拒答或转人工
-- **事实完整性**：文书生成对关键字段缺失是否明确提示，不自行编造
-- **律师审核率**：高风险咨询和合同是否正确进入审核队列
-- **缺失条款召回**：合同审查对常见缺失条款的召回率（cr_006 专项）
-- **北极星与留存**：活跃律师数、7/30 日留存（/api/admin/north-star、/api/admin/retention）
-- **成本**：LLM 用量按动作核算，日额度/速率治理
-
-## 运营工具（scripts/）
-
-| 脚本 | 用途 |
-|---|---|
-| `pilot_weekly_report.py` | 试点周报：漏斗/留存/成本/NPS/门户行为（排除供给账号） |
-| `evaluate_ab_conversion.py` | M-3 转化 A/B 判定（χ² 显著 + ≥30% 提升 + D7 留存，样本≥30） |
-| `create_pilot_backup.py` | 每日全量备份（DB + 数据目录 + SHA256 + 异地副本 + 保留策略） |
-| `check_openapi_contract.py` | OpenAPI 契约快照一致性门禁 |
-| `check_frontend_backend_contract.py` | 前后端联调门禁：前端全部 API 调用 vs 后端路由交叉比对（防 404 级漂移） |
-| `integration_smoke.py` / `integration_deep_smoke.py` | 联调冒烟：真实登录命中前端路径（读 + case 级 + 写入 + LLM 降级，需后端已启动） |
-| `export_review_feedback.py` / `export_exit_surveys.py` | 审核反馈 / 退出问卷导出 |
-| `loadtest_legal_paths.py` | 主路径压测 |
-| `check_pilot_readiness.py` | 试点环境门禁自检 |
-| `verify_agent_rollout_e2e.py` | Agent 落地端到端验证（临时库：schema + 应用启动 + 读/写/审批/审计链路） |
-
-## 运营看板
-
-访问 `/api/legal/metrics` 可获取：
-- 总咨询数、合同审查数、文书草稿数
-- 引用完整率（有法源引用的咨询占比）
-- 草稿采纳率（律师通过的草稿占比）
-- 高风险咨询数、高风险合同数
-- 退回原因统计
-- 审核状态分布
-
-## 演示建议路径
-
-1. 打开"法律咨询"，输入劳动争议问题，观察问题分类、事实整理、法源引用
-2. 打开"合同审查"，上传合同或粘贴合同文本，查看风险清单和原文定位
-3. 打开"文书草稿"，选择"劳动仲裁申请书"，填写必填字段，生成草稿
-4. 打开"律师审核"，查看待审核队列，执行通过/退回动作
-5. 打开"系统中心 → 法律运营看板"，查看引用完整率、草稿采纳率、高风险统计
-
-## 交付核验
-
-推荐在交付前至少做这几步：
-
-1. `python -m pytest -q`（全量测试，当前 1429 项通过）
-2. `ruff check --select E9,F821,F823,F632,F706,F811 app scripts tests`（CI 静态门禁）
-3. `python scripts/check_openapi_contract.py`（OpenAPI 契约快照一致性）
-4. `npm run build`（在 `frontend/` 下执行）
-5. `docker compose config`
-6. `docker compose up --build`
-
-## 项目结构
-
-```
-├── app/                       # 后端代码
-│   ├── api/                   # 表现层：HTTP/WS 路由（按域分包）
-│   │   ├── admin/ agent/ auth/ billing/ channels/ conversation/
-│   │   ├── developer/ documents/ legal/ org/ tasks/
-│   ├── services/              # 业务层：按有界上下文分包
-│   │   ├── auth/ org/ legal/ documents/ billing/ agent/ rag/ llm/
-│   │   ├── notification/ observability/ integration/ storage/ jobs/ memory/
-│   ├── models/                # 数据层：ORM，按域分包子包
-│   ├── schemas/               # Pydantic DTO
-│   ├── core/                  # 横切基础设施：config/db/llm/security/observability/time/errors
-│   ├── mcp/                   # MCP 工具执行 / 权限守卫 / 注册表 / SQL 守卫
-│   ├── tools/                 # Agent 工具
-│   └── tasks/                 # Celery 任务（按域拆 document/notification/legal/billing/integration/ops）
-├── frontend/                  # 前端代码（Vue 3 + Element Plus）
-│   └── src/
-│       ├── views/             # LegalWorkspace / Documents / Agent / System / Tasks…
-│       ├── components/
-│       ├── composables/
-│       └── api/
-├── eval/                      # 评测（bundle 构建、LLM 评测、法律检索/图谱评测、反馈回流评测）
-├── scripts/                   # 运维与数据脚本（备份、周报、A/B 判定、契约检查、压测…）
-├── docs/                      # 产品/合规/接入文档 + 架构（ARCHITECTURE.md、adr/）
-├── alembic/                   # 数据库迁移版本
-├── FL.md                      # 法律平台需求文档
-└── README.md                  # 本文件
-```
-
-> 分层依赖规则与目标架构详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
-
-## 常见问题
-
-### 1. 如何切换到本地 Ollama？
-
-修改 `.env`：
-```bash
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434
-LLM_MODEL=qwen2:7b
-```
-
-### 2. 如何切换向量库到 Qdrant？
-
-修改 `.env`：
-```bash
-VECTOR_STORE_PROVIDER=qdrant
-QDRANT_URL=http://localhost:6333
-VECTOR_STORE_COLLECTION_NAME=legal_docs
-```
-
-### 3. 如何添加新的法律法规？
-
-访问 `/api/legal/sources`，通过管理后台添加法规、司法解释、公开案例摘要，必须填写：
-- 标题、来源类型（statute / case / template）
-- 引用格式、管辖区域、版本
-- 生效日期、状态（active / inactive）
-
-### 4. 如何自定义文书模板？
-
-修改 `app/services/legal/legal_service.py` 中的 `DRAFT_FIELDS` 和 `DRAFT_REQUIRED_FIELDS`，添加新的文书类型和字段定义。
-
-### 5. 合同审查支持哪些文件格式？
-
-支持 PDF、DOCX、DOC、TXT、MD 格式。PDF 和图片合同会自动触发 OCR 解析。
-
-## 技术支持
-
-- 问题反馈：GitHub Issues
-- 技术文档：`/docs` 目录
-- API 文档：http://localhost:8001/docs
-- 产品需求：FL.md
-
-## 许可证
-
-本项目仅供学习和演示使用，不得用于提供正式法律服务或替代律师执业。
+本系统用于法律信息检索、合同和文书处理的辅助工作。模型输出、条款识别结果、风险提示和自动生成的文书均应由具备相应资质的人员复核后使用，不构成自动法律意见或替代专业判断。

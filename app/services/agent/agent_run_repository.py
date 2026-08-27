@@ -29,6 +29,9 @@ class RunStateRepository:
         session_id: int | None = None,
         trace_id: str | None = None,
         organization_id: int | None = None,
+        agent_type: str | None = None,
+        parent_run_id: int | None = None,
+        delegation_id: str | None = None,
     ) -> AgentRun:
         agent_run = AgentRun(
             user_id=user_id,
@@ -38,6 +41,9 @@ class RunStateRepository:
             total_steps=0,
             trace_id=trace_id,
             organization_id=organization_id,
+            agent_type=agent_type,
+            parent_run_id=parent_run_id,
+            delegation_id=delegation_id,
         )
         db.add(agent_run)
         db.commit()

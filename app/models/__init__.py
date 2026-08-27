@@ -5,13 +5,15 @@ from app.models.task_run import TaskRun
 from app.models.sync_run import SyncRun
 from app.models.user import User, UserRole, UserStatus
 from app.models.auth_log import LoginLog, AdminAuditLog
-from app.models.document import Document, DocumentAccessRule, DocumentAssistantArtifact, DocumentAssistantRevision, DocumentChunk, DocumentConflictCase, DocumentParseArtifact, DocumentParseJob, DocumentQARecord, KnowledgeBase
+from app.models.document import Document, DocumentAccessRule, DocumentAssistantArtifact, DocumentAssistantRevision, DocumentChunk, DocumentConflictCase, DocumentMultimodalAnalysis, DocumentParseArtifact, DocumentParseJob, DocumentQARecord, KnowledgeBase
 from app.models.task import Task, TaskComment, TaskLog
 from app.models.email import EmailDraft, EmailSendRequest, OutboundEmailPolicy, EmailAttachment
 from app.models.mailbox import MailboxSyncAccount, MailboxMessage, MailboxAttachment
 from app.models.chat import ChatSession, ChatMessage, ChatSessionMemory, UserPreferenceMemory
 from app.models.calendar import CalendarSuggestion
-from app.models.agent import AgentApprovalRequest, AgentAuditEvent, AgentRun, ToolCallLog
+from app.models.agent import A2ADelegation, AgentApprovalRequest, AgentAuditEvent, AgentRun, ToolCallLog
+from app.models.agent_eval import AgentEvalCandidate
+from app.models.mcp_policy import MCPPolicyVersion
 from app.models.prompt import PromptTemplate, PromptTemplateVersion
 from app.models.operation_log import OperationLog
 from app.models.token_usage import TokenUsage
@@ -19,6 +21,7 @@ from app.models.feedback import ExitSurvey, NpsResponse
 from app.models.platform_payment import PlatformPayment
 from app.models.feishu_binding import FeishuBinding
 from app.models.llm_call_log import LLMCallLog
+from app.models.model_release import ModelRelease
 from app.models.legal import ContractReview, LegalArticle, LegalConsultation, LegalDraft, LegalReviewAction, LegalSource
 from app.models.legal import LegalCase, LegalApprovalChain, LegalApprovalStep, LegalDocumentVersion
 from app.models.legal_domain import ContractRiskItem, LegalClaim, LegalEvidence, LegalFact, LegalReference
@@ -81,6 +84,7 @@ __all__ = [
     "DocumentConflictCase",
     "DocumentParseJob",
     "DocumentParseArtifact",
+    "DocumentMultimodalAnalysis",
     "DocumentQARecord",
     "KnowledgeBase",
     "Task",
@@ -99,14 +103,18 @@ __all__ = [
     "UserPreferenceMemory",
     "CalendarSuggestion",
     "AgentRun",
+    "A2ADelegation",
     "AgentApprovalRequest",
     "AgentAuditEvent",
     "ToolCallLog",
+    "AgentEvalCandidate",
+    "MCPPolicyVersion",
     "PromptTemplate",
     "PromptTemplateVersion",
     "OperationLog",
     "TokenUsage",
     "LLMCallLog",
+    "ModelRelease",
     "LegalSource",
     "LegalArticle",
     "LegalConsultation",

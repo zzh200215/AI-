@@ -32,6 +32,13 @@ class LLMCallLog(Base):
                             comment="稳定错误类别（classify_error_category 枚举），供聚合标签")
     routing_role = Column(String(16), nullable=True, index=True)
     routing_stage = Column(String(16), nullable=True, index=True)
+    # Versioned model rollout attribution.  Shadow calls are audited but never billed to users.
+    model_release_version = Column(String(128), nullable=True, index=True)
+    experiment_bucket = Column(Integer, nullable=True)
+    traffic_type = Column(String(16), nullable=True, index=True)
+    routing_reason = Column(String(512), nullable=True)
+    request_complexity = Column(String(16), nullable=True)
+    risk_level = Column(String(16), nullable=True)
     error_message = Column(Text, nullable=True)
     request_excerpt = Column(Text, nullable=True)
     response_excerpt = Column(Text, nullable=True)

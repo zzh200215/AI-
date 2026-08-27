@@ -14,6 +14,8 @@ router = APIRouter()
 
 
 class MCPToolCallRequest(BaseModel):
+    data_scopes: list[str] | None = Field(None, description="Dynamic data scopes granted for this call")
+    risk_threshold: str | None = Field(None, description="Maximum policy risk")
     tool_name: str = Field(..., min_length=1, description="MCP 工具名")
     arguments: dict = Field(default_factory=dict, description="工具参数")
     agent_type: str = Field("general_agent", description="调用方 agent 类型")
@@ -21,12 +23,13 @@ class MCPToolCallRequest(BaseModel):
 
 @router.get("/agent-types")
 def list_mcp_agent_types(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _ = current_user
     items = []
     for agent_type in all_agent_types():
-        allowed = sorted(allowed_tools_for(agent_type))
+        allowed = sorted(allowed_tools_for(agent_type, db=db))
         items.append(
             {
                 "agent_type": agent_type,
@@ -42,13 +45,14 @@ def list_mcp_agent_types(
 
 @router.get("/tools")
 def list_mcp_tools(
+    db: Session = Depends(get_db),
     agent_type: str = Query("general_agent", description="按 agent 类型过滤"),
     current_user: User = Depends(get_current_user),
 ):
     _ = current_user
     if agent_type not in all_agent_types():
         raise api_error(400, "未知的 agent_type", code="MCP_AGENT_TYPE_INVALID", detail=agent_type)
-    tools = mcp_registry.list_tools_for(agent_type)
+    tools = mcp_registry.list_tools_for(agent_type, db=db)
     return {
         "agent_type": agent_type,
         "items": tools,
@@ -76,6 +80,10 @@ async def call_mcp_tool(
             user_id=current_user.id,
             db=db,
             organization_id=current_user.organization_id,
+            approve_context={
+                "data_scopes": req.data_scopes,
+                "risk_threshold": req.risk_threshold,
+            },
         )
         return {
             "tool_name": req.tool_name,
@@ -85,4 +93,4 @@ async def call_mcp_tool(
     except Exception as e:
         if should_passthrough_exception(e):
             raise
-        raise api_error(500, "MCP 工具调用失败", code="MCP_TOOL_CALL_FAILED", detail=str(e))
+        raise api_error(500, "MCP 工具调用失败", code="MCP_TOOL_CALL_FAILED", detail=str(e)) from e

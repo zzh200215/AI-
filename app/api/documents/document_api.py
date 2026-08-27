@@ -18,6 +18,10 @@ from app.schemas.document import (
     KnowledgeBaseOut,
     DocumentVisualAnalyzeOut,
     DocumentVisualAnalyzeRequest,
+    DocumentMultimodalAnalyzeOut,
+    DocumentMultimodalAnalyzeRequest,
+    DocumentEvidenceLocateOut,
+    DocumentEvidenceLocateRequest,
 )
 from app.services.documents.analysis_service import analysis_service
 from app.services.documents.document_governance_service import document_governance_service
@@ -597,6 +601,88 @@ async def analyze_document_visual(
         if should_passthrough_exception(e):
             raise
         raise api_error(500, "文档视觉分析失败", code="DOCUMENT_VISUAL_ANALYSIS_FAILED", detail=str(e))
+
+
+@router.post("/{document_id}/multimodal-analyze", response_model=DocumentMultimodalAnalyzeOut)
+async def analyze_document_multimodal(
+    document_id: int,
+    req: DocumentMultimodalAnalyzeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """扫描合同版面/OCR/签章/表格统一分析，产物按文档版本缓存。"""
+    if req.page_start is not None and req.page_end is not None and req.page_end < req.page_start:
+        raise api_error(400, "页码范围不合法", code="DOCUMENT_MULTIMODAL_PAGE_RANGE_INVALID")
+    try:
+        return await document_service.analyze_multimodal(
+            document_id,
+            db,
+            user_id=current_user.id,
+            role=current_user.role,
+            organization_id=current_user.organization_id,
+            department_id=current_user.department_id,
+            use_vision_model=req.use_vision_model,
+            force=req.force,
+            page_start=req.page_start,
+            page_end=req.page_end,
+        )
+    except ValueError as e:
+        if str(e) == "Document not found":
+            raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND", detail=str(e))
+        raise api_error(400, "多模态文档分析请求不合法", code="DOCUMENT_MULTIMODAL_ANALYSIS_INVALID", detail=str(e))
+    except Exception as e:
+        if should_passthrough_exception(e):
+            raise
+        raise api_error(500, "多模态文档分析失败", code="DOCUMENT_MULTIMODAL_ANALYSIS_FAILED", detail=str(e))
+
+
+@router.get("/{document_id}/multimodal-analysis", response_model=DocumentMultimodalAnalyzeOut)
+def get_document_multimodal_analysis(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = document_service.get_multimodal_analysis(
+            document_id,
+            db,
+            user_id=current_user.id,
+            role=current_user.role,
+            organization_id=current_user.organization_id,
+            department_id=current_user.department_id,
+        )
+        if result is None:
+            raise api_error(404, "尚未生成多模态分析产物", code="DOCUMENT_MULTIMODAL_ANALYSIS_NOT_FOUND")
+        return result
+    except ValueError as e:
+        raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND", detail=str(e))
+
+
+@router.post("/{document_id}/evidence-locate", response_model=DocumentEvidenceLocateOut)
+def locate_document_evidence(
+    document_id: int,
+    req: DocumentEvidenceLocateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按关键词返回证据页码、摘录及版面框；未分析时不隐式触发昂贵 OCR。"""
+    try:
+        return document_service.locate_multimodal_evidence(
+            document_id,
+            req.query,
+            db,
+            user_id=current_user.id,
+            role=current_user.role,
+            organization_id=current_user.organization_id,
+            department_id=current_user.department_id,
+            limit=req.limit,
+        )
+    except ValueError as e:
+        raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND", detail=str(e))
+    except Exception as e:
+        if should_passthrough_exception(e):
+            raise
+        raise api_error(500, "证据定位失败", code="DOCUMENT_EVIDENCE_LOCATE_FAILED", detail=str(e))
 
 
 @router.post("/compare")

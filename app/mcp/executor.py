@@ -19,21 +19,28 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.mcp.registry import mcp_registry
 from app.mcp.permission_guard import permission_guard
+from app.mcp.registry import mcp_registry
 from app.mcp.tool_contract import requires_approval_for, resolve_contract
 from app.services.agent.agent_approval_service import agent_approval_service
 from app.services.agent.agent_audit import (
     EVENT_APPROVAL_CREATED,
     EVENT_PERMISSION_DECISION,
+    EVENT_RETRIEVAL_RESULT,
     EVENT_TIMEOUT,
     EVENT_TOOL_EXECUTED,
     agent_audit_service,
+)
+from app.services.agent.agent_observability import (
+    observe_tool_call,
+    record_retrieval_result,
+    record_tool_outcome,
 )
 from app.services.agent.agent_run_state import (
     ERROR_CATEGORY_CANCELLED,
@@ -138,6 +145,8 @@ class AgentToolExecutor:
             db=db,
             agent_run_id=agent_run_id,
             user_id=user_id,
+            organization_id=organization_id,
+            policy_context=approve_context,
         )
         if not decision.allowed:
             self._audit(
@@ -149,6 +158,18 @@ class AgentToolExecutor:
                 duration_ms=duration_ms(),
             )
             return self._guard.denied_result(decision), serialized_input
+
+        # Persist allowed decisions as well as denials.  Replay needs the
+        # complete decision stream to detect policy-version or authorization
+        # drift, not only calls that were blocked.
+        self._audit(
+            db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
+            user_id=user_id, organization_id=organization_id,
+            tool_name=tool_name, tool_version=contract.version,
+            event_type=EVENT_PERMISSION_DECISION,
+            decision=decision.to_dict(), status="allowed",
+            duration_ms=duration_ms(),
+        )
 
         # ── 2. 取消检查 ───────────────────────────────────────────
         if cancel_check is not None:
@@ -177,7 +198,7 @@ class AgentToolExecutor:
         approval_required = (
             not skip_approval
             and user_id is not None
-            and requires_approval_for(tool_name, contract)
+            and (decision.requires_approval or requires_approval_for(tool_name, contract))
         )
         if approval_required and db is None:
             # fail-closed：需要人工审批的写工具在缺少数据库会话（无法创建审批记录）
@@ -206,6 +227,9 @@ class AgentToolExecutor:
                 agent_type=agent_type,
                 agent_run_id=agent_run_id,
                 step_id=step_id,
+                risk_level=decision.risk_level,
+                policy_version=decision.policy_version,
+                data_scope=decision.data_scope,
             )
             self._audit(
                 db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
@@ -257,19 +281,35 @@ class AgentToolExecutor:
                     return cached, serialized_input
 
         # ── 5. 执行（超时 + 重试）─────────────────────────────────
-        result = await self._invoke_with_policy(
+        with observe_tool_call(
+            run_id=agent_run_id,
+            trace_id=trace_id,
+            step=step_id,
             tool_name=tool_name,
-            action_input=action_input,
-            contract_retryable=contract.retryable,
-            contract_max_retries=contract.max_retries,
-            backoff_base=contract.backoff_base_seconds,
-            timeout_seconds=timeout_seconds,
             agent_type=agent_type,
-            user_id=user_id,
-            db=db,
-            agent_run_id=agent_run_id,
-            cancel_check=cancel_check,
-        )
+            read_only=contract.read_only,
+        ) as tool_span:
+            result = await self._invoke_with_policy(
+                tool_name=tool_name,
+                action_input=action_input,
+                contract_retryable=contract.retryable,
+                contract_max_retries=contract.max_retries,
+                backoff_base=contract.backoff_base_seconds,
+                timeout_seconds=timeout_seconds,
+                agent_type=agent_type,
+                user_id=user_id,
+                db=db,
+                agent_run_id=agent_run_id,
+                cancel_check=cancel_check,
+            )
+            outcome_category = classify_error(result.get("error"), result.get("mcp_error_code"))
+            record_tool_outcome(
+                tool_span,
+                success=bool(result.get("success")),
+                status="success" if result.get("success") else "error",
+                duration_ms=duration_ms(),
+                error_category=outcome_category,
+            )
 
         # ── 6. 幂等登记完成/失败 ──────────────────────────────────
         if idempotency_key is not None:
@@ -303,6 +343,44 @@ class AgentToolExecutor:
                 status="success" if result.get("success") else "error",
                 duration_ms=duration_ms(),
             )
+        if contract.read_only and tool_name in {"document_search_tool", "legal_search_tool", "knowledge_search_tool"}:
+            record_retrieval_result(
+                run_id=agent_run_id,
+                trace_id=trace_id,
+                step=step_id,
+                tool_name=tool_name,
+                result=result,
+            )
+            self._audit(
+                db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
+                user_id=user_id, organization_id=organization_id,
+                tool_name=tool_name, tool_version=contract.version,
+                event_type=EVENT_RETRIEVAL_RESULT,
+                summary={"success": bool(result.get("success"))},
+                status="success" if result.get("success") else "error",
+                duration_ms=duration_ms(),
+            )
+        if not result.get("success") and agent_run_id is not None:
+            try:
+                from app.services.agent.online_eval_service import online_eval_service
+
+                online_eval_service.capture_failure(
+                    db,
+                    run_id=agent_run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    failure_type=f"tool_{tool_name}_{error_category}",
+                    evidence={
+                        "tool_name": tool_name,
+                        "status": "error",
+                        "error_category": error_category,
+                        "mcp_error_code": result.get("mcp_error_code"),
+                        "duration_ms": duration_ms(),
+                    },
+                )
+            except Exception:
+                db.rollback()
         return result, serialized_input
 
     async def _invoke_with_policy(
@@ -377,7 +455,7 @@ class AgentToolExecutor:
                 ),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return _timeout_result(tool_name, timeout_seconds)
         except Exception as exc:  # noqa: BLE001 - 执行器兜底，不透出内部细节
             logger.warning("tool invocation unexpected error tool=%s: %s", tool_name, type(exc).__name__)

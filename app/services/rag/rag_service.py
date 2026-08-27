@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 import time
 
@@ -42,8 +43,11 @@ from app.services.rag.rag_runtime import resolve_runtime_config
 from app.services.rag.rerank import build_reranker
 from app.services.rag.retrieval import RetrievalMixin
 from app.services.rag.vector_store import build_vector_store
+from app.services.rag.trace import TRACE_VERSION, query_summary, score_margin, set_last_trace
+from app.core.telemetry import observe_span
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
@@ -143,6 +147,35 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
         document_status: str | None = None,
         authorized_document_ids: list[int] | None = None,
     ) -> list[dict]:
+        chunks, trace = await self._search_with_trace_async(
+            query,
+            document_id=document_id,
+            top_k=top_k,
+            user_id=user_id,
+            min_recall_candidates=min_recall_candidates,
+            recall_multiplier=recall_multiplier,
+            query_variant_limit=query_variant_limit,
+            knowledge_base_id=knowledge_base_id,
+            document_status=document_status,
+            authorized_document_ids=authorized_document_ids,
+        )
+        set_last_trace(trace)
+        return chunks
+
+    async def _search_with_trace_async(
+        self,
+        query: str,
+        document_id: int | None = None,
+        top_k: int | None = None,
+        user_id: int | None = None,
+        min_recall_candidates: int | None = None,
+        recall_multiplier: int | None = None,
+        query_variant_limit: int | None = None,
+        *,
+        knowledge_base_id: int | None = None,
+        document_status: str | None = None,
+        authorized_document_ids: list[int] | None = None,
+    ) -> tuple[list[dict], dict]:
         runtime_config = self.get_runtime_config(
             top_k=top_k,
             min_recall_candidates=min_recall_candidates,
@@ -156,30 +189,59 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
             document_status=document_status,
             authorized_document_ids=authorized_document_ids,
         )
-        query_variants = self._rewrite_queries(query, limit=runtime_config["query_variant_limit"])
-        if settings.RAG_QUERY_REWRITE_LLM_ENABLED:
-            for llm_variant in await self._rewrite_query_llm(query, user_id):
-                if llm_variant not in query_variants:
-                    query_variants.append(llm_variant)
+        with observe_span("rag.plan", {"rag.query_variant_limit": runtime_config["query_variant_limit"]}):
+            query_variants = self._rewrite_queries(query, limit=runtime_config["query_variant_limit"])
+            if settings.RAG_QUERY_REWRITE_LLM_ENABLED:
+                for llm_variant in await self._rewrite_query_llm(query, user_id):
+                    if llm_variant not in query_variants:
+                        query_variants.append(llm_variant)
         candidate_limit = max(
             runtime_config["top_k"] * runtime_config["recall_multiplier"],
             runtime_config["min_recall_candidates"],
         )
-        dense_candidates, keyword_candidates = await asyncio.gather(
-            self._dense_multi_recall(query_variants, where=where, candidate_limit=candidate_limit, user_id=user_id),
-            self._keyword_multi_recall(query_variants, where=where, candidate_limit=candidate_limit),
-        )
-        fused_candidates = self._rrf_fuse_candidates(
-            dense_candidates=dense_candidates,
-            keyword_candidates=keyword_candidates,
-        )
-        return await self._get_reranker().rerank(
-            query=query,
-            query_variants=query_variants,
-            candidates=fused_candidates,
-            top_k=runtime_config["top_k"],
-            user_id=user_id,
-        )
+        retrieval_started = time.time()
+        with observe_span("rag.retrieve", {"rag.top_k": runtime_config["top_k"]}):
+            dense_candidates, keyword_candidates = await asyncio.gather(
+                self._dense_multi_recall(query_variants, where=where, candidate_limit=candidate_limit, user_id=user_id),
+                self._keyword_multi_recall(query_variants, where=where, candidate_limit=candidate_limit),
+            )
+            fused_candidates = self._rrf_fuse_candidates(
+                dense_candidates=dense_candidates,
+                keyword_candidates=keyword_candidates,
+            )
+        rerank_started = time.time()
+        rerank_status = "success"
+        with observe_span("rag.rerank", {"rag.candidate_count": len(fused_candidates)}):
+            try:
+                chunks = await self._get_reranker().rerank(
+                    query=query,
+                    query_variants=query_variants,
+                    candidates=fused_candidates,
+                    top_k=runtime_config["top_k"],
+                    user_id=user_id,
+                )
+            except Exception:
+                rerank_status = "fallback"
+                logger.exception("RAG rerank failed; returning fused candidates")
+                chunks = fused_candidates[: runtime_config["top_k"]]
+        retrieval_trace = {
+            "trace_version": TRACE_VERSION,
+            "query": query_summary(query, variant_count=len(query_variants)),
+            "retrieval": {
+                "query_mode": "llm" if settings.RAG_QUERY_REWRITE_LLM_ENABLED else "rule",
+                "dense_candidates": len(dense_candidates),
+                "keyword_candidates": len(keyword_candidates),
+                "fused_candidates": len(fused_candidates),
+                "reranked_candidates": len(chunks),
+                "duration_ms": int((time.time() - retrieval_started) * 1000),
+                "rerank_duration_ms": int((time.time() - rerank_started) * 1000),
+                "status": "success" if dense_candidates or keyword_candidates else "degraded",
+                "rerank_status": rerank_status,
+                "top_score": round(float((chunks[0].get("retrieval_score") or 0.0)), 4) if chunks else 0.0,
+                "score_margin": score_margin(chunks),
+            },
+        }
+        return chunks, retrieval_trace
 
     def search(
         self,
@@ -252,6 +314,17 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
             authorized_document_ids=authorized_document_ids,
         )
         retrieval_duration_ms = int((time.time() - retrieval_started) * 1000)
+        retrieval_trace = {
+            "trace_version": TRACE_VERSION,
+            "query": query_summary(query),
+            "retrieval": {
+                "reranked_candidates": len(chunks),
+                "duration_ms": retrieval_duration_ms,
+                "status": "success" if chunks else "degraded",
+                "top_score": round(float((chunks[0].get("retrieval_score") or 0.0)), 4) if chunks else 0.0,
+                "score_margin": score_margin(chunks),
+            },
+        }
         return await self.answer_from_chunks_async(
             query,
             chunks=chunks,
@@ -264,6 +337,7 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
             document_status=document_status,
             authorized_document_ids=authorized_document_ids,
             conversation_history=conversation_history,
+            retrieval_trace=retrieval_trace,
         )
 
     async def answer_from_chunks_async(
@@ -281,6 +355,7 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
         document_status: str | None = None,
         authorized_document_ids: list[int] | None = None,
         conversation_history: list[dict] | None = None,
+        retrieval_trace: dict | None = None,
     ) -> dict:
         """Generate a grounded answer from already retrieved chunks.
 
@@ -302,6 +377,7 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
                 retrieval_duration_ms=retrieval_duration_ms,
                 generation_duration_ms=0,
                 runtime_config=runtime_config,
+                retrieval_trace=retrieval_trace,
             )
             self._record_pipeline_log(log_query or query, document_id, user_id, runtime_config, result)
             return result
@@ -344,20 +420,22 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
                 retrieval_duration_ms=retrieval_duration_ms,
                 generation_duration_ms=0,
                 runtime_config=runtime_config,
+                retrieval_trace=retrieval_trace,
             )
             self._record_pipeline_log(log_query or query, document_id, user_id, runtime_config, result)
             return result
 
         metadata = prompt_service.get_template_metadata("rag_answer", user_id=user_id)
         generation_started = time.time()
-        answer = await llm_client.generate(
-            prompt,
-            temperature=0.3,
-            action="rag_answer",
-            user_id=user_id,
-            prompt_template=metadata.get("prompt_template"),
-            prompt_version=metadata.get("prompt_version"),
-        )
+        with observe_span("rag.generate", {"rag.model": settings.LLM_MODEL}):
+            answer = await llm_client.generate(
+                prompt,
+                temperature=0.3,
+                action="rag_answer",
+                user_id=user_id,
+                prompt_template=metadata.get("prompt_template"),
+                prompt_version=metadata.get("prompt_version"),
+            )
         generation_duration_ms = int((time.time() - generation_started) * 1000)
         normalized_answer = answer.strip()
         can_answer = not self._looks_like_refusal(normalized_answer)
@@ -384,6 +462,7 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
             retrieval_duration_ms=retrieval_duration_ms,
             generation_duration_ms=generation_duration_ms,
             runtime_config=runtime_config,
+            retrieval_trace=retrieval_trace,
         )
         self._record_pipeline_log(log_query or query, document_id, user_id, runtime_config, result)
         return result
