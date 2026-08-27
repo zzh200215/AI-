@@ -2,8 +2,9 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.mcp.permissions import agent_allows_tool, canonical_agent_type
+from app.services.agent.agent_prompts import POLICY_GUARDRAIL_ROLE, SUB_AGENTS
 from app.services.agent.agent_registry import AGENT_REGISTRY_VERSION, TASK_PROTOCOL_VERSION, list_agent_registrations
-from app.services.agent.agent_service import AgentService, POLICY_GUARDRAIL_ROLE, SUB_AGENTS
+from app.services.agent.agent_service import AgentService
 
 
 class AgentRoleBoundaryTests(unittest.IsolatedAsyncioTestCase):

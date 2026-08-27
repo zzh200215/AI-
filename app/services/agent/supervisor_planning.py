@@ -1,4 +1,4 @@
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.mcp.permissions import (
     agent_allows_tool,
@@ -8,12 +8,15 @@ from app.models.agent import AgentRun
 from app.services.agent.agent_planner import Planner
 from app.services.agent.agent_registry import TASK_PROTOCOL_VERSION
 
+if TYPE_CHECKING:
+    from app.services.agent.agent_runtime import AgentRuntime
+
 
 class SupervisorPlanningMixin:
     @staticmethod
-    def _is_cancel_requested(state: dict[str, Any]) -> bool:
-        run_id = state["agent_run"].id
-        status = state["db"].query(AgentRun.status).filter(AgentRun.id == run_id).scalar()
+    def _is_cancel_requested(runtime: "AgentRuntime") -> bool:
+        run_id = runtime.agent_run.id
+        status = runtime.db.query(AgentRun.status).filter(AgentRun.id == run_id).scalar()
         return status == "cancelling"
 
     def _select_worker_agent(self, goal: str) -> str:

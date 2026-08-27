@@ -1,6 +1,9 @@
 """#94/Agent workflow 节点层（langgraph 节点 + 路由决策）
 
 从 agent_service.py 拆出（E-4），MRO 经 AgentService 访问执行/生命周期辅助方法。
+
+状态与运行时分离：节点只读写 ``AgentGraphState`` 的可序列化通道，Session / ORM /
+事件回调等活对象一律经 ``resolve_runtime(state)`` 从 LangGraph runtime context 取用。
 """
 import json
 import time
@@ -17,6 +20,7 @@ from app.services.agent.agent_prompts import (
     sanitize_agent_error_message as _sanitize_agent_error_message,
 )
 from app.services.agent.agent_run_state import AgentRunState
+from app.services.agent.agent_runtime import resolve_runtime
 
 # 连续非法决策（retry）上限：达到后强制收敛为 finish，避免挤占受限的步骤预算。
 MAX_CONSECUTIVE_RETRIES = 3
@@ -47,8 +51,9 @@ class AgentWorkflowNodesMixin:
         return "partial" if int(state.get("step") or 0) >= int(state.get("max_steps") or 0) else "continue"
 
     async def _workflow_decide(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         # run 级截止时间：在步骤边界检查，超时直接收敛为 partial（timeout）。
-        model = state.get("_model")
+        model = runtime.model
         if model is not None and model.is_expired():
             state.update(
                 {
@@ -58,7 +63,7 @@ class AgentWorkflowNodesMixin:
                 }
             )
             return state
-        if self._is_cancel_requested(state):
+        if self._is_cancel_requested(runtime):
             state.update({"current_decision": {"action_type": "cancelled"}, "current_raw": "cancel_requested"})
             return state
         if state.get("parallel_pending"):
@@ -70,7 +75,7 @@ class AgentWorkflowNodesMixin:
                     "current_raw": "parallel_read_only",
                 }
             )
-            self._save_workflow_snapshot(state, node="parallel_fanout")
+            self._save_workflow_snapshot(runtime, state, node="parallel_fanout")
             return state
         step = int(state.get("step") or 0) + 1
         started = time.time()
@@ -157,10 +162,10 @@ class AgentWorkflowNodesMixin:
             else f"[{state['master_agent']} -> {step_worker_agent}]"
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "step_started",
-                "run_id": state["agent_run"].id,
+                "run_id": runtime.agent_run.id,
                 "step": step,
                 "action_type": action_type,
                 "tool_name": tool_name,
@@ -187,27 +192,29 @@ class AgentWorkflowNodesMixin:
         return state
 
     async def _workflow_cancelled(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         answer = "执行已取消，后续步骤未继续运行。"
-        model = state.get("_model")
+        model = runtime.model
         if isinstance(model, AgentRunState):
             model.cancel_requested = True
         log = self._create_log(
-            db=state["db"], agent_run_id=state["agent_run"].id, step=int(state.get("step") or 0),
+            db=runtime.db, agent_run_id=runtime.agent_run.id, step=int(state.get("step") or 0),
             decision={"action_type": "cancelled", "thought": "[supervisor_agent] 检测到取消请求。"}, raw_decision=state.get("current_raw") or "cancel_requested",
             tool_name="run_cancelled", input_params={}, observation=_json_dumps({"success": False, "message": answer}),
             output_result=answer, status="cancelled", error="cancelled_by_user", duration_ms=0,
         )
         run = self._save_run(
-            state["db"], state["agent_run"], status="cancelled", final_answer=answer, failure_reason="cancelled_by_user",
+            runtime.db, runtime.agent_run, status="cancelled", final_answer=answer, failure_reason="cancelled_by_user",
             total_steps=int(state.get("step") or 0), completed_at=utc_now(),
         )
-        await self._emit_event(state.get("event_callback"), {"type": "run_completed", "run": self.serialize_run(run), "master_agent": state["master_agent"], "worker_agent": state.get("worker_agent")})
-        state["final_run"] = run
+        await self._emit_event(runtime.event_callback, {"type": "run_completed", "run": self.serialize_run(run), "master_agent": state["master_agent"], "worker_agent": state.get("worker_agent")})
+        runtime.final_run = run
         return state
 
     async def _workflow_parallel_fanout(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         started = time.time()
-        branches = await self._run_parallel_read_only(state)
+        branches = await self._run_parallel_read_only(runtime, state)
         branch_logs = []
         for index, branch in enumerate(branches.values(), start=1):
             observation = _json_dumps(
@@ -219,8 +226,8 @@ class AgentWorkflowNodesMixin:
                 }
             )
             log = self._create_log(
-                db=state["db"],
-                agent_run_id=state["agent_run"].id,
+                db=runtime.db,
+                agent_run_id=runtime.agent_run.id,
                 step=int(state.get("step") or 0) + index,
                 decision={"action_type": "parallel_tool_call", "thought": f"[supervisor_agent -> {branch['worker_agent']}] 并行只读分支"},
                 raw_decision="parallel_read_only",
@@ -234,14 +241,14 @@ class AgentWorkflowNodesMixin:
             )
             branch_logs.append(self.serialize_log(log))
             await self._emit_event(
-                state.get("event_callback"),
-                {"type": "step_completed", "run_id": state["agent_run"].id, "log": self.serialize_log(log), "master_agent": state["master_agent"], "worker_agent": branch["worker_agent"]},
+                runtime.event_callback,
+                {"type": "step_completed", "run_id": runtime.agent_run.id, "log": self.serialize_log(log), "master_agent": state["master_agent"], "worker_agent": branch["worker_agent"]},
             )
         fanout_observation = _json_dumps(
             {"success": all(item["success"] for item in branches.values()), "data": {"branches": branches, "execution_mode": "parallel_read_only"}}
         )
         fanout_log = self._create_log(
-            db=state["db"], agent_run_id=state["agent_run"].id, step=int(state.get("step") or 0) + len(branches) + 1,
+            db=runtime.db, agent_run_id=runtime.agent_run.id, step=int(state.get("step") or 0) + len(branches) + 1,
             decision={"action_type": "parallel_fanout", "thought": "[supervisor_agent] 并行只读 Worker 已启动。"}, raw_decision="parallel_read_only",
             tool_name="supervisor_parallel_fanout", input_params={"workers": list(branches)}, observation=fanout_observation,
             output_result=fanout_observation, status="success" if all(item["success"] for item in branches.values()) else "error",
@@ -258,10 +265,11 @@ class AgentWorkflowNodesMixin:
                 "verification_target": "parallel_aggregate",
             }
         )
-        self._save_workflow_snapshot(state, node="parallel_fanout")
+        self._save_workflow_snapshot(runtime, state, node="parallel_fanout")
         return state
 
     async def _workflow_parallel_aggregate(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         branches = state.get("parallel_results") or {}
         completed = [item for item in branches.values() if item.get("success")]
         failed = [item for item in branches.values() if not item.get("success")]
@@ -301,27 +309,28 @@ class AgentWorkflowNodesMixin:
         state["supervisor_plan"] = {**state.get("supervisor_plan", {}), "aggregation": aggregation}
         observation = _json_dumps({"success": not failed, "data": aggregation})
         log = self._create_log(
-            db=state["db"], agent_run_id=state["agent_run"].id, step=int(state.get("step") or 0) + 1,
+            db=runtime.db, agent_run_id=runtime.agent_run.id, step=int(state.get("step") or 0) + 1,
             decision={"action_type": "aggregate", "thought": "[supervisor_agent] 汇聚并行只读 Worker 输出。"}, raw_decision="parallel_read_only",
             tool_name="supervisor_aggregate", input_params={"workers": list(branches)}, observation=observation,
             output_result=answer, status="success" if not failed else "partial", error=None, duration_ms=0,
         )
-        await self._emit_event(state.get("event_callback"), {"type": "step_completed", "run_id": state["agent_run"].id, "log": self.serialize_log(log), "master_agent": state["master_agent"], "worker_agent": "supervisor_agent"})
+        await self._emit_event(runtime.event_callback, {"type": "step_completed", "run_id": runtime.agent_run.id, "log": self.serialize_log(log), "master_agent": state["master_agent"], "worker_agent": "supervisor_agent"})
         state["last_observation"] = observation
-        self._save_workflow_snapshot(state, node="parallel_aggregate")
+        self._save_workflow_snapshot(runtime, state, node="parallel_aggregate")
         result_run = self._finalize_completed_run(
-            db=state["db"], agent_run=state["agent_run"], final_answer=answer, last_observation=observation,
+            db=runtime.db, agent_run=runtime.agent_run, final_answer=answer, last_observation=observation,
             failure_reason=None if not failed else "parallel_branch_failed", total_steps=int(state.get("step") or 0) + 1,
             master_agent=state["master_agent"], worker_agent="supervisor_agent", run_started=state["run_started"],
             summary_status="success" if not failed else "partial", error_message=None if not failed else "parallel_branch_failed",
             worker_plan=state.get("worker_plan"), handoffs=state.get("handoffs"), supervisor_plan_details=state.get("supervisor_plan"),
         )
-        await self._emit_event(state.get("event_callback"), {"type": "run_completed", "run": self.serialize_run(result_run), "master_agent": state["master_agent"], "worker_agent": "supervisor_agent"})
-        state["final_run"] = result_run
+        await self._emit_event(runtime.event_callback, {"type": "run_completed", "run": self.serialize_run(result_run), "master_agent": state["master_agent"], "worker_agent": "supervisor_agent"})
+        runtime.final_run = result_run
         return state
 
     async def _workflow_verify_evidence(self, state: dict[str, Any]) -> dict[str, Any]:
-        logs = self.get_run_logs(state["agent_run"].id, state["db"], user_id=state["user_id"])
+        runtime = resolve_runtime(state)
+        logs = self.get_run_logs(runtime.agent_run.id, runtime.db, user_id=state["user_id"])
         verification = self._verify_evidence(logs)
         observation = _json_dumps(
             {
@@ -335,8 +344,8 @@ class AgentWorkflowNodesMixin:
             "thought": f"[{state['master_agent']} -> {POLICY_GUARDRAIL_ROLE}] 核验结构化结论的原文依据。",
         }
         log = self._create_log(
-            db=state["db"],
-            agent_run_id=state["agent_run"].id,
+            db=runtime.db,
+            agent_run_id=runtime.agent_run.id,
             step=state["step"],
             decision=verifier_decision,
             raw_decision=state["current_raw"],
@@ -349,27 +358,28 @@ class AgentWorkflowNodesMixin:
             duration_ms=0,
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "step_completed",
-                "run_id": state["agent_run"].id,
+                "run_id": runtime.agent_run.id,
                 "log": self.serialize_log(log),
                 "master_agent": state["master_agent"],
                 "worker_agent": POLICY_GUARDRAIL_ROLE,
             },
         )
         state["evidence_verification"] = verification
-        self._save_workflow_snapshot(state, node="verify_evidence")
+        self._save_workflow_snapshot(runtime, state, node="verify_evidence")
         return state
 
     async def _workflow_evidence_insufficient(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         verification = state.get("evidence_verification") or {}
         failed_claims = int(verification.get("failed_claims") or 0)
         answer = f"任务未继续执行：发现 {failed_claims} 条结论缺少原文证据，请补充资料或重新分析。"
-        self._save_workflow_snapshot(state, node="evidence_insufficient")
+        self._save_workflow_snapshot(runtime, state, node="evidence_insufficient")
         result_run = self._finalize_completed_run(
-            db=state["db"],
-            agent_run=state["agent_run"],
+            db=runtime.db,
+            agent_run=runtime.agent_run,
             final_answer=answer,
             last_observation=state["last_observation"],
             failure_reason="evidence_verification_failed",
@@ -384,7 +394,7 @@ class AgentWorkflowNodesMixin:
             supervisor_plan_details=state.get("supervisor_plan"),
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "run_completed",
                 "run": self.serialize_run(result_run),
@@ -392,16 +402,17 @@ class AgentWorkflowNodesMixin:
                 "worker_agent": POLICY_GUARDRAIL_ROLE,
             },
         )
-        state["final_run"] = result_run
+        runtime.final_run = result_run
         return state
 
     async def _workflow_finish(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         decision = state["current_decision"]
         answer = decision["answer"] or "任务已完成。"
         duration_ms = int((time.time() - state["step_started_at"]) * 1000)
         log = self._create_log(
-            db=state["db"],
-            agent_run_id=state["agent_run"].id,
+            db=runtime.db,
+            agent_run_id=runtime.agent_run.id,
             step=state["step"],
             decision=decision,
             raw_decision=state["current_raw"],
@@ -414,10 +425,10 @@ class AgentWorkflowNodesMixin:
             duration_ms=duration_ms,
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "step_completed",
-                "run_id": state["agent_run"].id,
+                "run_id": runtime.agent_run.id,
                 "log": self.serialize_log(log),
             },
         )
@@ -438,12 +449,12 @@ class AgentWorkflowNodesMixin:
         if next_worker_index < len(worker_plan):
             next_worker = worker_plan[next_worker_index]
             handoff_context = self._build_handoff_context(
-                self.get_run_logs(state["agent_run"].id, state["db"], user_id=state["user_id"]),
+                self.get_run_logs(runtime.agent_run.id, runtime.db, user_id=state["user_id"]),
                 state["worker_agent"],
                 answer,
             )
             next_task_contract = self._build_task_contract(
-                agent_run_id=state["agent_run"].id,
+                agent_run_id=runtime.agent_run.id,
                 goal=state["goal"],
                 receiver=next_worker,
                 supervisor_plan=state["supervisor_plan"],
@@ -462,8 +473,8 @@ class AgentWorkflowNodesMixin:
             handoffs = list(state.get("handoffs") or [])
             handoffs.append(handoff)
             handoff_log = self._create_log(
-                db=state["db"],
-                agent_run_id=state["agent_run"].id,
+                db=runtime.db,
+                agent_run_id=runtime.agent_run.id,
                 step=state["step"],
                 decision={"action_type": "handoff", "thought": f"[{state['master_agent']}] Worker 交接"},
                 raw_decision=state["current_raw"],
@@ -476,10 +487,10 @@ class AgentWorkflowNodesMixin:
                 duration_ms=0,
             )
             await self._emit_event(
-                state.get("event_callback"),
+                runtime.event_callback,
                 {
                     "type": "worker_handoff",
-                    "run_id": state["agent_run"].id,
+                    "run_id": runtime.agent_run.id,
                     "log": self.serialize_log(handoff_log),
                     "from_worker": state["worker_agent"],
                     "to_worker": next_worker,
@@ -507,12 +518,12 @@ class AgentWorkflowNodesMixin:
                     "needs_evidence_verification": False,
                 }
             )
-            self._save_workflow_snapshot(state, node="decide")
+            self._save_workflow_snapshot(runtime, state, node="decide")
             return state
-        self._save_workflow_snapshot(state, node="completed")
+        self._save_workflow_snapshot(runtime, state, node="completed")
         result_run = self._finalize_completed_run(
-            db=state["db"],
-            agent_run=state["agent_run"],
+            db=runtime.db,
+            agent_run=runtime.agent_run,
             final_answer=answer,
             last_observation=state["last_observation"],
             failure_reason=None,
@@ -526,7 +537,7 @@ class AgentWorkflowNodesMixin:
             supervisor_plan_details=state.get("supervisor_plan"),
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "run_completed",
                 "run": self.serialize_run(result_run),
@@ -534,11 +545,12 @@ class AgentWorkflowNodesMixin:
                 "worker_agent": state["worker_agent"],
             },
         )
-        state["final_run"] = result_run
+        runtime.final_run = result_run
         state["handoff_pending"] = False
         return state
 
     async def _workflow_retry(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         decision = state["current_decision"]
         error_message = decision.get("parse_error") or "Agent 决策要求重试"
         observation = _json_dumps(
@@ -554,8 +566,8 @@ class AgentWorkflowNodesMixin:
         )
         duration_ms = int((time.time() - state["step_started_at"]) * 1000)
         log = self._create_log(
-            db=state["db"],
-            agent_run_id=state["agent_run"].id,
+            db=runtime.db,
+            agent_run_id=runtime.agent_run.id,
             step=state["step"],
             decision=decision,
             raw_decision=state["current_raw"],
@@ -572,10 +584,10 @@ class AgentWorkflowNodesMixin:
             duration_ms=duration_ms,
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "step_completed",
-                "run_id": state["agent_run"].id,
+                "run_id": runtime.agent_run.id,
                 "log": self.serialize_log(log),
                 "master_agent": state["master_agent"],
                 "worker_agent": state["current_worker_agent"],
@@ -583,10 +595,11 @@ class AgentWorkflowNodesMixin:
         )
         state["last_observation"] = observation
         state["retry_count"] = int(state.get("retry_count") or 0) + 1
-        model = state.get("_model")
+        model = runtime.model
         if isinstance(model, AgentRunState):
             model.retry_count = state["retry_count"]
         self._save_workflow_snapshot(
+            runtime,
             state,
             node="decide",
             last_observation=observation,
@@ -597,17 +610,18 @@ class AgentWorkflowNodesMixin:
         return state
 
     async def _workflow_tool_call(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         result, serialized_input = await self._execute_tool(
             state["current_tool_name"],
             state["current_safe_input"],
             state["user_id"],
-            state["db"],
+            runtime.db,
             agent_type=state["current_worker_agent"],
-            agent_run_id=state["agent_run"].id,
+            agent_run_id=runtime.agent_run.id,
             step_id=int(state.get("step") or 0),
-            trace_id=state["agent_run"].trace_id,
-            organization_id=state["agent_run"].organization_id,
-            cancel_check=lambda: self._is_cancel_requested(state),
+            trace_id=runtime.agent_run.trace_id,
+            organization_id=runtime.agent_run.organization_id,
+            cancel_check=lambda: self._is_cancel_requested(runtime),
         )
         result.setdefault("data", {})
         if isinstance(result["data"], dict):
@@ -625,8 +639,8 @@ class AgentWorkflowNodesMixin:
             or bool((result.get("data") or {}).get("approval_required"))
         )
         log = self._create_log(
-            db=state["db"],
-            agent_run_id=state["agent_run"].id,
+            db=runtime.db,
+            agent_run_id=runtime.agent_run.id,
             step=state["step"],
             decision=state["current_decision"],
             raw_decision=state["current_raw"],
@@ -639,10 +653,10 @@ class AgentWorkflowNodesMixin:
             duration_ms=duration_ms,
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "step_completed",
-                "run_id": state["agent_run"].id,
+                "run_id": runtime.agent_run.id,
                 "log": self.serialize_log(log),
                 "master_agent": state["master_agent"],
                 "worker_agent": state["current_worker_agent"],
@@ -651,13 +665,14 @@ class AgentWorkflowNodesMixin:
         if approval_required:
             approval_request_id = (result.get("data") or {}).get("approval_request_id")
             awaiting_run = self._save_workflow_snapshot(
+                runtime,
                 state,
                 node="awaiting_approval",
                 status="awaiting_approval",
                 result=_json_dumps(
                     self._build_awaiting_approval_payload(
-                        agent_run_id=state["agent_run"].id,
-                        db=state["db"],
+                        agent_run_id=runtime.agent_run.id,
+                        db=runtime.db,
                         user_id=state["user_id"],
                         master_agent=state["master_agent"],
                         worker_agent=state["worker_agent"],
@@ -674,7 +689,7 @@ class AgentWorkflowNodesMixin:
                 total_steps=state["step"],
             )
             await self._emit_event(
-                state.get("event_callback"),
+                runtime.event_callback,
                 {
                     "type": "run_waiting_approval",
                     "run": self.serialize_run(awaiting_run),
@@ -682,13 +697,14 @@ class AgentWorkflowNodesMixin:
                     "tool_name": state["current_tool_name"],
                 },
             )
-            state["final_run"] = awaiting_run
+            runtime.final_run = awaiting_run
             state["awaiting_approval"] = True
             return state
         if state["current_tool_name"] in EVIDENCE_SOURCE_TOOLS and result.get("success"):
             state["evidence_scope_seen"] = True
         state["last_observation"] = observation
         self._save_workflow_snapshot(
+            runtime,
             state,
             node="decide",
             last_observation=observation,
@@ -702,16 +718,17 @@ class AgentWorkflowNodesMixin:
         return state
 
     async def _workflow_partial(self, state: dict[str, Any]) -> dict[str, Any]:
+        runtime = resolve_runtime(state)
         if state.get("timed_out"):
             partial_answer = "执行已超时，任务未完成。"
             failure_reason = "run_timeout"
         else:
             partial_answer = "已达到最大执行步数，任务部分完成。"
-            failure_reason = state["agent_run"].failure_reason or "max_steps_reached"
-        self._save_workflow_snapshot(state, node="partial")
+            failure_reason = runtime.agent_run.failure_reason or "max_steps_reached"
+        self._save_workflow_snapshot(runtime, state, node="partial")
         result_run = self._finalize_completed_run(
-            db=state["db"],
-            agent_run=state["agent_run"],
+            db=runtime.db,
+            agent_run=runtime.agent_run,
             final_answer=partial_answer,
             last_observation=state["last_observation"],
             failure_reason=failure_reason,
@@ -726,7 +743,7 @@ class AgentWorkflowNodesMixin:
             supervisor_plan_details=state.get("supervisor_plan"),
         )
         await self._emit_event(
-            state.get("event_callback"),
+            runtime.event_callback,
             {
                 "type": "run_completed",
                 "run": self.serialize_run(result_run),
@@ -734,6 +751,6 @@ class AgentWorkflowNodesMixin:
                 "worker_agent": state["worker_agent"],
             },
         )
-        state["final_run"] = result_run
+        runtime.final_run = result_run
         return state
 

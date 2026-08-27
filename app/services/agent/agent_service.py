@@ -61,6 +61,7 @@ from app.services.agent.agent_run_state import (
     AgentPlan,
     AgentRunState,
 )
+from app.services.agent.agent_runtime import AgentGraphState, AgentRuntime
 from app.services.agent.agent_skill_registry import resolve_agent_skill
 from app.services.agent.agent_workflow_nodes import AgentWorkflowNodesMixin
 from app.services.agent.run_queries import RunQueriesMixin
@@ -69,7 +70,14 @@ from app.services.llm.llm_observability_service import llm_observability_service
 from app.services.llm.llm_service import llm_service
 from app.services.llm.prompt_service import prompt_service
 from app.services.memory.conversation_memory_service import conversation_memory_service
-from app.workflows.langgraph_compat import GRAPH_END, GRAPH_START, StateGraph, workflow_engine_name
+from app.workflows.langgraph_compat import (
+    GRAPH_END,
+    GRAPH_START,
+    RUNTIME_CONTEXT_KEY,
+    StateGraph,
+    build_checkpointer,
+    workflow_engine_name,
+)
 
 
 class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, SupervisorPlanningMixin, RunQueriesMixin):
@@ -466,20 +474,20 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             "updated_at": utc_now().isoformat(),
         }
 
-    def _save_workflow_snapshot(self, state: dict[str, Any], *, node: str, **fields) -> AgentRun:
-        model = state.get("_model")
+    def _save_workflow_snapshot(self, runtime: AgentRuntime, state: dict[str, Any], *, node: str, **fields) -> AgentRun:
+        model = runtime.model
         if not isinstance(model, AgentRunState):
             model = AgentRunState(
-                run_id=state["agent_run"].id,
-                user_id=state["user_id"],
-                status=str(state["agent_run"].status or STATUS_RUNNING),
+                run_id=runtime.agent_run.id,
+                user_id=runtime.user_id,
+                status=str(runtime.agent_run.status or STATUS_RUNNING),
                 node=node,
                 step=int(state.get("step") or 0),
                 retry_count=int(state.get("retry_count") or 0),
             )
         snapshot = self._build_workflow_snapshot(state, node=node)
         return self._repo.save_workflow_state(
-            state["db"], state["agent_run"], snapshot=snapshot, state=model, node=node, **fields
+            runtime.db, runtime.agent_run, snapshot=snapshot, state=model, node=node, **fields
         )
 
     def _append_observation(self, messages: list[dict[str, str]], raw: str, observation: str) -> None:
@@ -633,7 +641,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         finally:
             branch_db.close()
 
-    async def _run_parallel_read_only(self, state: dict[str, Any]) -> dict[str, Any]:
+    async def _run_parallel_read_only(self, runtime: AgentRuntime, state: dict[str, Any]) -> dict[str, Any]:
         branch_plan = state.get("parallel_plan") or {}
         semaphore = asyncio.Semaphore(self.settings.AGENT_PARALLEL_MAX_WORKERS)
 
@@ -651,11 +659,11 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                     tool_name=str(step.get("tool_name") or ""),
                     action_input=step.get("action_input") if isinstance(step.get("action_input"), dict) else {},
                     user_id=state["user_id"],
-                    db=state["db"],
-                    agent_run_id=state["agent_run"].id,
+                    db=runtime.db,
+                    agent_run_id=runtime.agent_run.id,
                     step_id=int(state.get("step") or 0) + index + 1,
-                    trace_id=state["agent_run"].trace_id,
-                    organization_id=state["agent_run"].organization_id,
+                    trace_id=runtime.agent_run.trace_id,
+                    organization_id=runtime.agent_run.organization_id,
                 )
             )
         results = await asyncio.gather(*jobs) if jobs else []
@@ -742,7 +750,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         return result_run
 
     def _build_workflow(self):
-        graph = StateGraph(dict)
+        # 显式 state schema（可序列化通道）+ context schema（Session/ORM/回调等活对象），
+        # 二者分离后 checkpointer 才能按 thread_id 落盘并回放图状态。
+        graph = StateGraph(AgentGraphState, context_schema=AgentRuntime)
         graph.add_node("decide", self._workflow_decide)
         graph.add_node("parallel_fanout", self._workflow_parallel_fanout)
         graph.add_node("parallel_aggregate", self._workflow_parallel_aggregate)
@@ -815,7 +825,12 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         graph.add_edge("cancelled", GRAPH_END)
         graph.add_edge("evidence_insufficient", GRAPH_END)
         graph.add_edge("awaiting_approval", GRAPH_END)
-        return graph.compile()
+        return graph.compile(checkpointer=build_checkpointer())
+
+    @staticmethod
+    def _graph_config(agent_run: AgentRun) -> dict[str, Any]:
+        """thread_id 按 Run 划分：checkpointer 以此为主键落盘，可回放/续跑同一次执行。"""
+        return {"configurable": {"thread_id": f"agent-run-{agent_run.id}"}}
 
     async def run(
         self,
@@ -934,12 +949,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         state = {
             "goal": goal,
             "user_id": user_id,
-            "db": db,
             "session_id": session_id,
             "memory_context": memory_context,
             "max_steps": max_steps,
-            "event_callback": event_callback,
-            "agent_run": agent_run,
             "run_started": run_started,
             "master_agent": master_agent,
             "worker_agent": worker_agent,
@@ -961,21 +973,28 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             ),
             "last_observation": "",
             "step": 0,
-            "final_run": None,
             "evidence_scope_seen": False,
             "retry_count": 0,
         }
         # 具类型运行状态（取代无约束 dict 的持久化/恢复载体），并写计划审计。
-        state["_model"] = AgentRunState(
-            run_id=agent_run.id,
+        # db / agent_run / event_callback / 类型化状态属运行时上下文，不进入图 state，
+        # 否则 checkpointer 无法序列化，也就谈不上断点续跑。
+        runtime = AgentRuntime(
+            db=db,
+            agent_run=agent_run,
             user_id=user_id,
-            status=STATUS_RUNNING,
-            node="decide",
-            step=0,
-            trace_id=trace_id,
-            organization_id=organization_id,
-            plan=AgentPlan.from_dict(supervisor_plan),
-            run_deadline_at=agent_run.run_deadline_at.isoformat() if agent_run.run_deadline_at else None,
+            event_callback=event_callback,
+            model=AgentRunState(
+                run_id=agent_run.id,
+                user_id=user_id,
+                status=STATUS_RUNNING,
+                node="decide",
+                step=0,
+                trace_id=trace_id,
+                organization_id=organization_id,
+                plan=AgentPlan.from_dict(supervisor_plan),
+                run_deadline_at=agent_run.run_deadline_at.isoformat() if agent_run.run_deadline_at else None,
+            ),
         )
         try:
             agent_audit_service.record(
@@ -990,7 +1009,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             )
         except Exception:  # noqa: BLE001 - 审计失败不阻断执行
             db.rollback()
-        self._save_workflow_snapshot(state, node="decide")
+        self._save_workflow_snapshot(runtime, state, node="decide")
 
         try:
             with observe_agent_run(
@@ -1000,8 +1019,8 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                 organization_id=organization_id,
                 max_steps=max_steps,
             ):
-                final_state = await self._workflow.ainvoke(state)
-            result_run = final_state.get("final_run") or agent_run
+                await self._workflow.ainvoke(state, self._graph_config(agent_run), context=runtime)
+            result_run = runtime.final_run or agent_run
             self._sync_a2a_delegation(db, result_run)
             return result_run
         except Exception as exc:
@@ -1169,6 +1188,28 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         if not pending_log:
             raise ValueError("Pending approval step not found")
 
+        resume_step = pending_log.step or int(agent_run.total_steps or 0)
+        resume_retry_count = int(snapshot.get("retry_count") or 0)
+        # 运行时上下文先于工具执行建立：取消检查与图执行共用同一份活对象。
+        runtime = AgentRuntime(
+            db=db,
+            agent_run=agent_run,
+            user_id=user_id,
+            event_callback=event_callback,
+            model=AgentRunState(
+                run_id=agent_run.id,
+                user_id=user_id,
+                status=STATUS_RUNNING,
+                node="decide",
+                step=resume_step,
+                trace_id=agent_run.trace_id,
+                organization_id=agent_run.organization_id,
+                plan=AgentPlan.from_dict(supervisor_plan),
+                run_deadline_at=agent_run.run_deadline_at.isoformat() if agent_run.run_deadline_at else None,
+                retry_count=resume_retry_count,
+            ),
+        )
+
         await self._emit_event(
             event_callback,
             {
@@ -1229,7 +1270,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             step_id=pending_log.step,
             trace_id=agent_run.trace_id,
             organization_id=agent_run.organization_id,
-            cancel_check=lambda: self._is_cancel_requested({"db": db, "agent_run": agent_run}),
+            cancel_check=lambda: self._is_cancel_requested(runtime),
         )
         result.setdefault("data", {})
         if isinstance(result["data"], dict):
@@ -1293,12 +1334,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         state = {
             "goal": agent_run.goal,
             "user_id": user_id,
-            "db": db,
             "session_id": agent_run.session_id,
             "memory_context": memory_context,
             "max_steps": max_steps,
-            "event_callback": event_callback,
-            "agent_run": agent_run,
             "run_started": run_started,
             "master_agent": master_agent,
             "worker_agent": worker_agent,
@@ -1306,8 +1344,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             "task_contract": task_contract,
             "messages": messages,
             "last_observation": observation,
-            "step": pending_log.step or int(agent_run.total_steps or 0),
-            "final_run": None,
+            "step": resume_step,
             "evidence_scope_seen": self._has_evidence_source_logs(logs),
             "worker_plan": worker_plan,
             "worker_index": worker_index,
@@ -1316,21 +1353,10 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             "parallel_plan": snapshot.get("parallel_plan") or supervisor_plan.get("parallel_plan"),
             "parallel_pending": False,
             "parallel_results": snapshot.get("parallel_results") or {},
-            "retry_count": int(snapshot.get("retry_count") or 0),
+            "retry_count": resume_retry_count,
         }
-        state["_model"] = AgentRunState(
-            run_id=agent_run.id,
-            user_id=user_id,
-            status=STATUS_RUNNING,
-            node="decide",
-            step=state["step"],
-            trace_id=agent_run.trace_id,
-            organization_id=agent_run.organization_id,
-            plan=AgentPlan.from_dict(supervisor_plan),
-            run_deadline_at=agent_run.run_deadline_at.isoformat() if agent_run.run_deadline_at else None,
-            retry_count=state["retry_count"],
-        )
         self._save_workflow_snapshot(
+            runtime,
             state,
             node="decide",
             last_observation=observation,
@@ -1339,12 +1365,12 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         )
         if state["step"] >= max_steps:
             state["awaiting_approval"] = False
-            partial_state = await self._workflow_partial(state)
-            result_run = partial_state.get("final_run") or agent_run
+            await self._workflow_partial({**state, RUNTIME_CONTEXT_KEY: runtime})
+            result_run = runtime.final_run or agent_run
             self._sync_a2a_delegation(db, result_run)
             return result_run
-        final_state = await self._workflow.ainvoke(state)
-        result_run = final_state.get("final_run") or agent_run
+        await self._workflow.ainvoke(state, self._graph_config(agent_run), context=runtime)
+        result_run = runtime.final_run or agent_run
         self._sync_a2a_delegation(db, result_run)
         return result_run
 

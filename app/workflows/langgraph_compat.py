@@ -7,6 +7,11 @@ from typing import Any, Awaitable, Callable
 START = "__start__"
 END = "__end__"
 
+# 运行时上下文在 state 中的传递键：仅回退引擎与图外调用使用。
+# 真 langgraph 走 `ainvoke(..., context=...)` + `langgraph.runtime.get_runtime()`，
+# 上下文不进入 checkpoint，因此可以承载 Session / ORM 实例 / 回调等活对象。
+RUNTIME_CONTEXT_KEY = "__runtime_context__"
+
 # 持久化 checkpoint 的本地 SQLite 路径（仅在安装 langgraph-checkpoint-sqlite 时启用）
 _CHECKPOINT_DB_PATH = os.environ.get("LANGGRAPH_CHECKPOINT_DB", "data/langgraph_checkpoints.sqlite")
 
@@ -41,10 +46,19 @@ class _FallbackCompiledGraph:
         self._conditional_edges = conditional_edges
         self._entry_point = entry_point
 
-    async def ainvoke(self, state: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def ainvoke(
+        self,
+        state: dict[str, Any],
+        config: dict[str, Any] | None = None,
+        *,
+        context: Any | None = None,
+    ) -> dict[str, Any]:
         _ = config  # 回退引擎无状态；checkpoint config 在此为 no-op，仅为与真 langgraph 对齐签名
         current = self._entry_point
         current_state = state
+        if context is not None:
+            # 回退引擎没有 Runtime 通道，把上下文放进 state 让节点用同一 API 取用。
+            current_state = {**current_state, RUNTIME_CONTEXT_KEY: context}
         while current != END:
             handler = self._nodes[current]
             current_state = await handler(current_state)
@@ -59,8 +73,8 @@ class _FallbackCompiledGraph:
 
 
 class _FallbackStateGraph:
-    def __init__(self, state_type: type[dict[str, Any]] | None = None) -> None:
-        _ = state_type
+    def __init__(self, state_type: type[dict[str, Any]] | None = None, context_schema: type | None = None) -> None:
+        _ = (state_type, context_schema)
         self._nodes: dict[str, NodeFn] = {}
         self._edges: dict[str, list[str]] = defaultdict(list)
         self._conditional_edges: dict[str, tuple[ConditionFn, dict[str, str]]] = {}
