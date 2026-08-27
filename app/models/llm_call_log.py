@@ -28,8 +28,9 @@ class LLMCallLog(Base):
     task_id = Column(String(128), nullable=True, index=True)
     agent_run_id = Column(Integer, nullable=True, index=True)
     organization_id = Column(Integer, nullable=True, index=True)
-    error_category = Column(String(32), nullable=True, index=True,
-                            comment="稳定错误类别（classify_error_category 枚举），供聚合标签")
+    error_category = Column(
+        String(32), nullable=True, index=True, comment="稳定错误类别（classify_error_category 枚举），供聚合标签"
+    )
     routing_role = Column(String(16), nullable=True, index=True)
     routing_stage = Column(String(16), nullable=True, index=True)
     # Versioned model rollout attribution.  Shadow calls are audited but never billed to users.

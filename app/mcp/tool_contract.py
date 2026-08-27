@@ -26,20 +26,20 @@ class ToolContract:
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     # 执行控制。
-    timeout_seconds: int | None = None          # None → 使用 AGENT_TOOL_TIMEOUT_SECONDS
-    max_retries: int = 0                        # 0 = 不重试
+    timeout_seconds: int | None = None  # None → 使用 AGENT_TOOL_TIMEOUT_SECONDS
+    max_retries: int = 0  # 0 = 不重试
     backoff_base_seconds: float = 2.0
-    retryable: bool = False                     # 仅暂时性错误类别可重试
+    retryable: bool = False  # 仅暂时性错误类别可重试
     # 幂等：写工具支持幂等键（由执行器按 run/step/tool/input_hash 维护）。
     idempotency_keyed: bool = False
     # 有副作用且无可靠幂等能力 → 标记为不可安全重试。
     safely_retryable: bool = True
     cancellable: bool = False
     compensable: bool = False
-    compensation_handler: str | None = None     # 方法名；None 且 compensable=True 时不可补偿
+    compensation_handler: str | None = None  # 方法名；None 且 compensable=True 时不可补偿
     side_effect: str = "none"
     cost: dict[str, Any] | None = field(default_factory=lambda: dict(_UNKNOWN_COST))
-    audit_level: str = "summary"                # "summary" | "full"
+    audit_level: str = "summary"  # "summary" | "full"
     sensitive_fields: tuple[str, ...] = ()
 
 
@@ -84,6 +84,4 @@ def requires_approval_for(tool_name: str, contract: ToolContract | None) -> bool
     if has_declared_contract and not contract.read_only:
         return True
     # 回退：既有 AgentApprovalService.HIGH_RISK_TOOLS
-    return policy_engine.evaluate(
-        agent_type="general_agent", tool_name=tool_name
-    ).requires_approval
+    return policy_engine.evaluate(agent_type="general_agent", tool_name=tool_name).requires_approval

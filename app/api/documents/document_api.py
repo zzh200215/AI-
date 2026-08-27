@@ -3,37 +3,37 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
 from app.core.api_response import api_error, paginated_payload, should_passthrough_exception
+from app.core.auth import get_current_user
 from app.core.celery_app import celery_app
 from app.core.database import get_db
 from app.core.obs_context import enqueue_headers as obs_enqueue_headers
 from app.core.task_status import serialize_async_result
-from app.models.user import User
 from app.models.document import Document
+from app.models.user import User
 from app.schemas.document import (
+    DocumentEvidenceLocateOut,
+    DocumentEvidenceLocateRequest,
+    DocumentMultimodalAnalyzeOut,
+    DocumentMultimodalAnalyzeRequest,
     DocumentOut,
     DocumentParseJobOut,
     DocumentQARecordOut,
-    KnowledgeBaseOut,
     DocumentVisualAnalyzeOut,
     DocumentVisualAnalyzeRequest,
-    DocumentMultimodalAnalyzeOut,
-    DocumentMultimodalAnalyzeRequest,
-    DocumentEvidenceLocateOut,
-    DocumentEvidenceLocateRequest,
+    KnowledgeBaseOut,
 )
 from app.services.documents.analysis_service import analysis_service
-from app.services.documents.document_governance_service import document_governance_service
 from app.services.documents.document_delivery_service import DocumentDeliveryError, document_delivery_service
+from app.services.documents.document_governance_service import document_governance_service
 from app.services.documents.document_job_service import document_job_service
 from app.services.documents.document_qa_service import document_qa_service
 from app.services.documents.document_security import DocumentSecurityError
 from app.services.documents.document_service import document_service
 from app.services.documents.upload_audit import write_upload_rejected_audit
+from app.services.jobs.task_service import task_service
 from app.services.observability.oplog_service import oplog_service
 from app.services.org.data_permission_service import data_permission_service
-from app.services.jobs.task_service import task_service
 
 router = APIRouter()
 
@@ -441,11 +441,16 @@ class CompareRequest(BaseModel):
 
 
 @router.post("/{document_id}/summarize")
-async def summarize_document(document_id: int, req: SummarizeRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def summarize_document(
+    document_id: int,
+    req: SummarizeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         if req.async_mode:
-            from app.tasks import summarize_document_task
             from app.services.org.authorization_service import authorization_service
+            from app.tasks import summarize_document_task
 
             job = document_job_service.create_job(
                 document_id=document_id,
@@ -458,10 +463,16 @@ async def summarize_document(document_id: int, req: SummarizeRequest, db: Sessio
             # 长流程权限快照：保证后台执行期间权限范围稳定。
             ctx = authorization_service.build_context(db, current_user)
             snapshot_id = authorization_service.capture_snapshot(
-                db, current_user, ctx, document_ids=[document_id],
+                db,
+                current_user,
+                ctx,
+                document_ids=[document_id],
             )
             task = summarize_document_task.delay(
-                document_id, current_user.id, req.max_length, snapshot_id,
+                document_id,
+                current_user.id,
+                req.max_length,
+                snapshot_id,
                 headers=obs_enqueue_headers(),
             )
             document_job_service.attach_task_id(job.id, task.id, db)
@@ -475,15 +486,19 @@ async def summarize_document(document_id: int, req: SummarizeRequest, db: Sessio
                 detail=f"task_id={task.id}; max_length={req.max_length}",
             )
             from fastapi.responses import JSONResponse
-            return JSONResponse(status_code=202, content={
-                "document_id": document_id,
-                "job_id": job.id,
-                "task_id": task.id,
-                "state": "PENDING",
-                "status": "queued",
-                "async_mode": True,
-                "status_url": f"/api/documents/task/{task.id}/status",
-            })
+
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "document_id": document_id,
+                    "job_id": job.id,
+                    "task_id": task.id,
+                    "state": "PENDING",
+                    "status": "queued",
+                    "async_mode": True,
+                    "status_url": f"/api/documents/task/{task.id}/status",
+                },
+            )
 
         raw_text = document_service.summarize(
             document_id,
@@ -493,7 +508,9 @@ async def summarize_document(document_id: int, req: SummarizeRequest, db: Sessio
             organization_id=current_user.organization_id,
             department_id=current_user.department_id,
         )
-        summary = await analysis_service.summarize_document(raw_text, max_length=req.max_length, user_id=current_user.id)
+        summary = await analysis_service.summarize_document(
+            raw_text, max_length=req.max_length, user_id=current_user.id
+        )
         doc = document_service.get(
             document_id,
             db,
@@ -515,11 +532,13 @@ async def summarize_document(document_id: int, req: SummarizeRequest, db: Sessio
 
 
 @router.post("/{document_id}/analyze")
-async def analyze_document(document_id: int, req: AnalyzeRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def analyze_document(
+    document_id: int, req: AnalyzeRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     try:
         if req.async_mode:
-            from app.tasks import analyze_document_task
             from app.services.org.authorization_service import authorization_service
+            from app.tasks import analyze_document_task
 
             job = document_job_service.create_job(
                 document_id=document_id,
@@ -531,10 +550,16 @@ async def analyze_document(document_id: int, req: AnalyzeRequest, db: Session = 
             )
             ctx = authorization_service.build_context(db, current_user)
             snapshot_id = authorization_service.capture_snapshot(
-                db, current_user, ctx, document_ids=[document_id],
+                db,
+                current_user,
+                ctx,
+                document_ids=[document_id],
             )
             task = analyze_document_task.delay(
-                document_id, current_user.id, req.max_length, snapshot_id,
+                document_id,
+                current_user.id,
+                req.max_length,
+                snapshot_id,
                 headers=obs_enqueue_headers(),
             )
             document_job_service.attach_task_id(job.id, task.id, db)
@@ -548,15 +573,19 @@ async def analyze_document(document_id: int, req: AnalyzeRequest, db: Session = 
                 detail=f"task_id={task.id}; max_length={req.max_length}",
             )
             from fastapi.responses import JSONResponse
-            return JSONResponse(status_code=202, content={
-                "document_id": document_id,
-                "job_id": job.id,
-                "task_id": task.id,
-                "state": "PENDING",
-                "status": "queued",
-                "async_mode": True,
-                "status_url": f"/api/documents/task/{task.id}/status",
-            })
+
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "document_id": document_id,
+                    "job_id": job.id,
+                    "task_id": task.id,
+                    "state": "PENDING",
+                    "status": "queued",
+                    "async_mode": True,
+                    "status_url": f"/api/documents/task/{task.id}/status",
+                },
+            )
 
         return await document_service.analyze(
             document_id=document_id,
@@ -686,7 +715,9 @@ def locate_document_evidence(
 
 
 @router.post("/compare")
-async def compare_documents(req: CompareRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def compare_documents(
+    req: CompareRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     try:
         return await document_service.compare(
             document_ids=req.document_ids,
@@ -710,7 +741,9 @@ class AskRequest(BaseModel):
 
 
 @router.post("/{document_id}/ask")
-def ask_document(document_id: int, req: AskRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def ask_document(
+    document_id: int, req: AskRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     try:
         return document_service.ask(
             document_id,
@@ -730,7 +763,9 @@ def ask_document(document_id: int, req: AskRequest, db: Session = Depends(get_db
 
 
 @router.post("/{document_id}/extract-risks")
-async def extract_risks(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def extract_risks(
+    document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     try:
         risks = await document_service.extract_risks(
             document_id,
@@ -750,7 +785,9 @@ async def extract_risks(document_id: int, db: Session = Depends(get_db), current
 
 
 @router.post("/{document_id}/extract-todos")
-async def extract_todos(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def extract_todos(
+    document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     try:
         todos = await document_service.extract_todos(
             document_id,
@@ -770,7 +807,9 @@ async def extract_todos(document_id: int, db: Session = Depends(get_db), current
 
 
 @router.post("/{document_id}/create-tasks")
-async def create_tasks_from_document(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def create_tasks_from_document(
+    document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     try:
         tasks = await task_service.extract_from_document(document_id, current_user.id, db)
         return {
@@ -798,7 +837,9 @@ async def create_tasks_from_document(document_id: int, db: Session = Depends(get
 
 
 @router.post("/{document_id}/extract-clauses")
-async def extract_key_clauses(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def extract_key_clauses(
+    document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     try:
         clauses = await document_service.extract_key_clauses(
             document_id,
@@ -826,9 +867,13 @@ def get_task_status(
     # 归属校验：任务必须关联当前用户的文档作业，防止任意用户探测他人后台任务状态。
     from app.models.document import DocumentParseJob
 
-    job = db.query(DocumentParseJob).filter(
-        DocumentParseJob.task_id == task_id,
-    ).first()
+    job = (
+        db.query(DocumentParseJob)
+        .filter(
+            DocumentParseJob.task_id == task_id,
+        )
+        .first()
+    )
     if not job or (job.user_id != current_user.id and current_user.role != "admin"):
         raise api_error(404, "任务不存在", code="TASK_NOT_FOUND")
     result = celery_app.AsyncResult(task_id)
@@ -845,7 +890,14 @@ def list_document_parse_jobs(
 ):
     from app.models.document import DocumentParseJob
 
-    doc = document_service.get(document_id, db, user_id=current_user.id, role=current_user.role, organization_id=current_user.organization_id, department_id=current_user.department_id)
+    doc = document_service.get(
+        document_id,
+        db,
+        user_id=current_user.id,
+        role=current_user.role,
+        organization_id=current_user.organization_id,
+        department_id=current_user.department_id,
+    )
     if not doc:
         raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND")
     query = db.query(DocumentParseJob).filter(
@@ -869,10 +921,17 @@ def retry_document_parse(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.tasks import parse_document_task
     from app.services.org.authorization_service import authorization_service
+    from app.tasks import parse_document_task
 
-    doc = document_service.get(document_id, db, user_id=current_user.id, role=current_user.role, organization_id=current_user.organization_id, department_id=current_user.department_id)
+    doc = document_service.get(
+        document_id,
+        db,
+        user_id=current_user.id,
+        role=current_user.role,
+        organization_id=current_user.organization_id,
+        department_id=current_user.department_id,
+    )
     if not doc:
         raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND")
     job = document_job_service.create_job(
@@ -885,10 +944,16 @@ def retry_document_parse(
     )
     ctx = authorization_service.build_context(db, current_user)
     snapshot_id = authorization_service.capture_snapshot(
-        db, current_user, ctx, document_ids=[document_id],
+        db,
+        current_user,
+        ctx,
+        document_ids=[document_id],
     )
     task = parse_document_task.delay(
-        doc.id, doc.version_number, doc.file_type, snapshot_id,
+        doc.id,
+        doc.version_number,
+        doc.file_type,
+        snapshot_id,
         headers=obs_enqueue_headers(),
     )
     document_job_service.attach_task_id(job.id, task.id, db)
@@ -906,7 +971,14 @@ def list_document_versions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    doc = document_service.get(document_id, db, user_id=current_user.id, role=current_user.role, organization_id=current_user.organization_id, department_id=current_user.department_id)
+    doc = document_service.get(
+        document_id,
+        db,
+        user_id=current_user.id,
+        role=current_user.role,
+        organization_id=current_user.organization_id,
+        department_id=current_user.department_id,
+    )
     if not doc:
         raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND")
     root_id = doc.parent_document_id or doc.id
@@ -928,7 +1000,14 @@ def list_document_versions(
             "created_at": row.created_at,
         }
         for row in rows
-        if document_service.get(row.id, db, user_id=current_user.id, role=current_user.role, organization_id=current_user.organization_id, department_id=current_user.department_id)
+        if document_service.get(
+            row.id,
+            db,
+            user_id=current_user.id,
+            role=current_user.role,
+            organization_id=current_user.organization_id,
+            department_id=current_user.department_id,
+        )
     ]
     return {"document_id": document_id, "items": items, "total": len(items)}
 
@@ -943,7 +1022,14 @@ def list_document_qa_records(
 ):
     from app.models.document import DocumentQARecord
 
-    doc = document_service.get(document_id, db, user_id=current_user.id, role=current_user.role, organization_id=current_user.organization_id, department_id=current_user.department_id)
+    doc = document_service.get(
+        document_id,
+        db,
+        user_id=current_user.id,
+        role=current_user.role,
+        organization_id=current_user.organization_id,
+        department_id=current_user.department_id,
+    )
     if not doc:
         raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND")
     query = db.query(DocumentQARecord).filter(
@@ -971,7 +1057,14 @@ def list_document_qa_replays(
 ):
     from app.models.document import DocumentQARecord
 
-    doc = document_service.get(document_id, db, user_id=current_user.id, role=current_user.role, organization_id=current_user.organization_id, department_id=current_user.department_id)
+    doc = document_service.get(
+        document_id,
+        db,
+        user_id=current_user.id,
+        role=current_user.role,
+        organization_id=current_user.organization_id,
+        department_id=current_user.department_id,
+    )
     if not doc:
         raise api_error(404, "文档不存在", code="DOCUMENT_NOT_FOUND")
     query = db.query(DocumentQARecord).filter(

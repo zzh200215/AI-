@@ -23,8 +23,24 @@ _COMPLEXITY_ORDER = {"simple": 0, "medium": 1, "complex": 2}
 _RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 _HIGH_RISK_ACTION_PREFIXES = ("legal_", "agent_", "agentic_", "rag_", "text_to_sql")
 _COMPLEX_MARKERS = (
-    "合同", "法律", "仲裁", "诉讼", "风险", "对比", "比较", "差异", "条款", "流程",
-    "分析", "总结", "方案", "证据", "责任", "条件", "金额", "日期",
+    "合同",
+    "法律",
+    "仲裁",
+    "诉讼",
+    "风险",
+    "对比",
+    "比较",
+    "差异",
+    "条款",
+    "流程",
+    "分析",
+    "总结",
+    "方案",
+    "证据",
+    "责任",
+    "条件",
+    "金额",
+    "日期",
 )
 
 
@@ -65,15 +81,20 @@ class ModelReleaseService:
         normalized_action = (action or "").lower()
         text = source_text or ""
         normalized_level = (data_level or "").lower()
-        if normalized_action.startswith(_HIGH_RISK_ACTION_PREFIXES) or normalized_level in {"sensitive", "highly_sensitive"}:
+        if normalized_action.startswith(_HIGH_RISK_ACTION_PREFIXES) or normalized_level in {
+            "sensitive",
+            "highly_sensitive",
+        }:
             risk_level = "high" if normalized_level != "highly_sensitive" else "critical"
         elif normalized_action.startswith("document_") or any(marker in text for marker in _COMPLEX_MARKERS):
             risk_level = "medium"
         else:
             risk_level = "low"
 
-        if normalized_action.startswith(_HIGH_RISK_ACTION_PREFIXES) or len(text) > settings.LLM_SIMPLE_REQUEST_MAX_CHARS or any(
-            marker in text for marker in _COMPLEX_MARKERS
+        if (
+            normalized_action.startswith(_HIGH_RISK_ACTION_PREFIXES)
+            or len(text) > settings.LLM_SIMPLE_REQUEST_MAX_CHARS
+            or any(marker in text for marker in _COMPLEX_MARKERS)
         ):
             complexity = "complex"
         elif len(text) > max(120, settings.LLM_SIMPLE_REQUEST_MAX_CHARS // 2):
@@ -136,7 +157,9 @@ class ModelReleaseService:
             candidate_score = float(gate["candidate_score"])
             max_regression = float(gate.get("max_regression", 0))
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("evaluation_gate requires numeric baseline_score, candidate_score and max_regression") from exc
+            raise ValueError(
+                "evaluation_gate requires numeric baseline_score, candidate_score and max_regression"
+            ) from exc
         if not 0 <= max_regression <= 1:
             raise ValueError("evaluation_gate.max_regression must be between 0 and 1")
         passed = candidate_score >= baseline_score - max_regression
@@ -278,7 +301,9 @@ class ModelReleaseService:
         return db.query(ModelRelease).filter(ModelRelease.version == version).first()
 
     def list_releases(self, db: Session, *, limit: int = 100) -> list[ModelRelease]:
-        return db.query(ModelRelease).order_by(ModelRelease.created_at.desc(), ModelRelease.id.desc()).limit(limit).all()
+        return (
+            db.query(ModelRelease).order_by(ModelRelease.created_at.desc(), ModelRelease.id.desc()).limit(limit).all()
+        )
 
     def _resolve_active_release(self, db: Session, action: str) -> ModelRelease | None:
         rows = (
@@ -347,7 +372,10 @@ class ModelReleaseService:
                 eligible = False
                 reasons.append("cost_ratio_exceeded")
             bucket = self._stable_bucket(
-                version=release.version, action=action, user_id=user_id, request_id=request_id,
+                version=release.version,
+                action=action,
+                user_id=user_id,
+                request_id=request_id,
             )
             serve_candidate = eligible and bucket < int(release.rollout_percentage or 0)
             shadow_candidate = eligible and not serve_candidate and bucket < int(release.shadow_percentage or 0)
@@ -430,7 +458,11 @@ class ModelReleaseService:
                 breaches.append("p95_latency_exceeded")
             if cost_ratio is not None and cost_ratio > float(release.max_cost_ratio):
                 breaches.append("cost_ratio_exceeded")
-        status = "insufficient_data" if candidate_count < int(release.min_sample_size) else ("breached" if breaches else "healthy")
+        status = (
+            "insufficient_data"
+            if candidate_count < int(release.min_sample_size)
+            else ("breached" if breaches else "healthy")
+        )
         auto_rolled_back = False
         if auto_rollback and breaches and release.status == "active":
             self.rollback(db, version=release.version, actor_id=None)

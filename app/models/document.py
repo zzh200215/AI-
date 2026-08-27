@@ -76,7 +76,9 @@ class Document(Base):
     parent_document = relationship("Document", remote_side=[id])
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
     parse_jobs = relationship("DocumentParseJob", back_populates="document", cascade="all, delete-orphan")
-    multimodal_analyses = relationship("DocumentMultimodalAnalysis", back_populates="document", cascade="all, delete-orphan")
+    multimodal_analyses = relationship(
+        "DocumentMultimodalAnalysis", back_populates="document", cascade="all, delete-orphan"
+    )
     qa_records = relationship("DocumentQARecord", back_populates="document", cascade="all, delete-orphan")
 
 
@@ -108,9 +110,7 @@ class DocumentChunk(Base):
     embedding_id = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        UniqueConstraint("document_id", "chunk_index", name="uq_document_chunks_document_index"),
-    )
+    __table_args__ = (UniqueConstraint("document_id", "chunk_index", name="uq_document_chunks_document_index"),)
 
     document = relationship("Document", back_populates="chunks")
 
@@ -200,9 +200,7 @@ class DocumentMultimodalAnalysis(Base):
 
     document = relationship("Document", back_populates="multimodal_analyses")
 
-    __table_args__ = (
-        UniqueConstraint("document_id", "version_number", name="uq_document_multimodal_doc_version"),
-    )
+    __table_args__ = (UniqueConstraint("document_id", "version_number", name="uq_document_multimodal_doc_version"),)
 
 
 class DocumentQARecord(Base):

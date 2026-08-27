@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import contextvars
-
+import hashlib
 
 TRACE_VERSION = 1
 _last_trace: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
-    "rag_last_retrieval_trace", default=None,
+    "rag_last_retrieval_trace",
+    default=None,
 )
 
 

@@ -108,11 +108,7 @@ class AgentApprovalService:
 
     def _refresh_status(self, db: Session, request: AgentApprovalRequest) -> None:
         """把已过期的 pending 审批标记为 expired（惰性，查询/决策前调用）。"""
-        if (
-            request.status == STATUS_PENDING
-            and request.expires_at is not None
-            and request.expires_at < utc_now()
-        ):
+        if request.status == STATUS_PENDING and request.expires_at is not None and request.expires_at < utc_now():
             request.status = STATUS_EXPIRED
             request.decided_at = request.decided_at or utc_now()
             db.add(request)

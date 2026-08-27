@@ -116,19 +116,31 @@ class A2ACollaborationTests(unittest.TestCase):
     def test_idempotent_replay_returns_same_delegation_and_conflict_is_rejected(self):
         parent = self._run()
         first = self.service.create_delegation(
-            db=self.db, parent_run=parent, user=self.user, to_agent_type="knowledge_agent",
-            task="检索保密义务", idempotency_key="same-key",
+            db=self.db,
+            parent_run=parent,
+            user=self.user,
+            to_agent_type="knowledge_agent",
+            task="检索保密义务",
+            idempotency_key="same-key",
         )
         replay = self.service.create_delegation(
-            db=self.db, parent_run=parent, user=self.user, to_agent_type="knowledge_agent",
-            task="检索保密义务", idempotency_key="same-key",
+            db=self.db,
+            parent_run=parent,
+            user=self.user,
+            to_agent_type="knowledge_agent",
+            task="检索保密义务",
+            idempotency_key="same-key",
         )
         self.assertEqual(first.delegation_id, replay.delegation_id)
         self.assertEqual(self.db.query(A2ADelegation).count(), 1)
         with self.assertRaises(A2ADelegationError) as raised:
             self.service.create_delegation(
-                db=self.db, parent_run=parent, user=self.user, to_agent_type="knowledge_agent",
-                task="检索付款义务", idempotency_key="same-key",
+                db=self.db,
+                parent_run=parent,
+                user=self.user,
+                to_agent_type="knowledge_agent",
+                task="检索付款义务",
+                idempotency_key="same-key",
             )
         self.assertEqual(raised.exception.code, "A2A_IDEMPOTENCY_CONFLICT")
 
@@ -136,14 +148,22 @@ class A2ACollaborationTests(unittest.TestCase):
         parent = self._run()
         with self.assertRaises(A2ADelegationError) as target_error:
             self.service.create_delegation(
-                db=self.db, parent_run=parent, user=self.user, to_agent_type="unknown_agent", task="x",
+                db=self.db,
+                parent_run=parent,
+                user=self.user,
+                to_agent_type="unknown_agent",
+                task="x",
             )
         self.assertEqual(target_error.exception.code, "A2A_TARGET_NOT_FOUND")
 
         foreign_parent = self._run(organization_id=99)
         with self.assertRaises(A2ADelegationError) as tenant_error:
             self.service.create_delegation(
-                db=self.db, parent_run=foreign_parent, user=self.user, to_agent_type="knowledge_agent", task="x",
+                db=self.db,
+                parent_run=foreign_parent,
+                user=self.user,
+                to_agent_type="knowledge_agent",
+                task="x",
             )
         self.assertEqual(tenant_error.exception.code, "A2A_ORGANIZATION_MISMATCH")
 
@@ -152,8 +172,11 @@ class A2ACollaborationTests(unittest.TestCase):
         shallow_service = A2ACollaborationService(max_delegation_depth=1)
         with self.assertRaises(A2ADelegationError) as depth_error:
             shallow_service.create_delegation(
-                db=self.db, parent_run=depth_one, user=self.user,
-                to_agent_type="legal_compliance_agent", task="x",
+                db=self.db,
+                parent_run=depth_one,
+                user=self.user,
+                to_agent_type="legal_compliance_agent",
+                task="x",
             )
         self.assertEqual(depth_error.exception.code, "A2A_MAX_DEPTH_EXCEEDED")
 
@@ -181,7 +204,11 @@ class A2ACollaborationTests(unittest.TestCase):
         parent = self._run()
         secret_task = "客户秘密文本-secret-contract-body"
         delegation = self.service.create_delegation(
-            db=self.db, parent_run=parent, user=self.user, to_agent_type="knowledge_agent", task=secret_task,
+            db=self.db,
+            parent_run=parent,
+            user=self.user,
+            to_agent_type="knowledge_agent",
+            task=secret_task,
         )
         self.service.complete_delegation(
             db=self.db,
@@ -197,8 +224,7 @@ class A2ACollaborationTests(unittest.TestCase):
             ["a2a_delegation_created", "a2a_delegation_accepted", "a2a_delegation_completed"],
         )
         audit_payload = "\n".join(
-            (event.decision_json or "") + (event.summary_json or "")
-            for event in self.db.query(AgentAuditEvent).all()
+            (event.decision_json or "") + (event.summary_json or "") for event in self.db.query(AgentAuditEvent).all()
         )
         self.assertNotIn(secret_task, audit_payload)
         self.assertNotIn("secret-evidence-body", audit_payload)
@@ -230,9 +256,7 @@ class A2ACollaborationTests(unittest.TestCase):
             "app.services.agent.agent_service.agent_service.run",
             new=AsyncMock(side_effect=complete_child),
         ):
-            synchronized = asyncio.run(
-                self.service.dispatch_delegation(db=self.db, delegation=delegation, max_steps=3)
-            )
+            synchronized = asyncio.run(self.service.dispatch_delegation(db=self.db, delegation=delegation, max_steps=3))
 
         self.assertEqual(synchronized.status, "completed")
         events = self.db.query(AgentAuditEvent).order_by(AgentAuditEvent.id).all()

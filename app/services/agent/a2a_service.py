@@ -201,9 +201,7 @@ class A2ACollaborationService:
         try:
             from app.services.org.authorization_service import authorization_service
 
-            authorization_service.assert_snapshot(
-                db, parent_run.authorization_snapshot_id, user_id=user.id
-            )
+            authorization_service.assert_snapshot(db, parent_run.authorization_snapshot_id, user_id=user.id)
         except Exception as exc:  # Authorization service returns transport-safe HTTP exceptions.
             raise A2ADelegationError("A2A_AUTHZ_SNAPSHOT_INVALID", "委派授权已失效") from exc
 
@@ -248,14 +246,22 @@ class A2ACollaborationService:
         input_hash = _payload_hash(normalized_task)
         if not normalized_task:
             self._record_denied(
-                db=db, parent_run=parent_run, to_agent_type=canonical_target, task_type=normalized_type,
-                input_hash=input_hash, code="A2A_TASK_INVALID",
+                db=db,
+                parent_run=parent_run,
+                to_agent_type=canonical_target,
+                task_type=normalized_type,
+                input_hash=input_hash,
+                code="A2A_TASK_INVALID",
             )
             raise A2ADelegationError("A2A_TASK_INVALID", "委派任务不能为空")
         if canonical_target not in CANONICAL_AGENT_TYPES or not self._registration(canonical_target):
             self._record_denied(
-                db=db, parent_run=parent_run, to_agent_type=canonical_target, task_type=normalized_type,
-                input_hash=input_hash, code="A2A_TARGET_NOT_FOUND",
+                db=db,
+                parent_run=parent_run,
+                to_agent_type=canonical_target,
+                task_type=normalized_type,
+                input_hash=input_hash,
+                code="A2A_TARGET_NOT_FOUND",
             )
             raise A2ADelegationError("A2A_TARGET_NOT_FOUND", "目标 Agent 不可委派")
         try:
@@ -264,8 +270,12 @@ class A2ACollaborationService:
                 raise A2ADelegationError("A2A_MAX_DEPTH_EXCEEDED", "超过允许的委派深度")
         except A2ADelegationError as exc:
             self._record_denied(
-                db=db, parent_run=parent_run, to_agent_type=canonical_target, task_type=normalized_type,
-                input_hash=input_hash, code=exc.code,
+                db=db,
+                parent_run=parent_run,
+                to_agent_type=canonical_target,
+                task_type=normalized_type,
+                input_hash=input_hash,
+                code=exc.code,
             )
             raise
 
@@ -287,8 +297,12 @@ class A2ACollaborationService:
                 )
                 if not same_request:
                     self._record_denied(
-                        db=db, parent_run=parent_run, to_agent_type=canonical_target, task_type=normalized_type,
-                        input_hash=input_hash, code="A2A_IDEMPOTENCY_CONFLICT",
+                        db=db,
+                        parent_run=parent_run,
+                        to_agent_type=canonical_target,
+                        task_type=normalized_type,
+                        input_hash=input_hash,
+                        code="A2A_IDEMPOTENCY_CONFLICT",
                     )
                     raise A2ADelegationError("A2A_IDEMPOTENCY_CONFLICT", "幂等键已用于不同委派请求")
                 return existing
@@ -437,11 +451,7 @@ class A2ACollaborationService:
         """
         if not child_run.delegation_id:
             return None
-        delegation = (
-            db.query(A2ADelegation)
-            .filter(A2ADelegation.delegation_id == child_run.delegation_id)
-            .first()
-        )
+        delegation = db.query(A2ADelegation).filter(A2ADelegation.delegation_id == child_run.delegation_id).first()
         if not delegation:
             return None
         if delegation.child_run_id != child_run.id:

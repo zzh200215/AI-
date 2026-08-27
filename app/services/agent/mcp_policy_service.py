@@ -39,7 +39,9 @@ class MCPPolicyService:
         if not row:
             raise ValueError("MCP policy version not found")
         document = validate_policy_document(json.loads(row.policy_json))
-        db.query(MCPPolicyVersion).filter(MCPPolicyVersion.status == "active").update({"status": "retired"}, synchronize_session=False)
+        db.query(MCPPolicyVersion).filter(MCPPolicyVersion.status == "active").update(
+            {"status": "retired"}, synchronize_session=False
+        )
         row.status = "active"
         row.activated_by = actor_id
         row.activated_at = utc_now()
@@ -76,18 +78,24 @@ class MCPPolicyService:
                 "error_code",
             )
             metadata_drift = any(
-                field in original and original.get(field) != current.get(field)
-                for field in comparable_fields
+                field in original and original.get(field) != current.get(field) for field in comparable_fields
             )
             version_drift = original.get("policy_version") not in (None, current.get("policy_version"))
-            decisions.append({
-                "event_id": event.id,
-                "tool_name": tool_name,
-                "original": original,
-                "current": current,
-                "drifted": bool(metadata_drift or version_drift),
-            })
-        return {"run_id": run_id, "decision_count": len(decisions), "drift_count": sum(item["drifted"] for item in decisions), "decisions": decisions}
+            decisions.append(
+                {
+                    "event_id": event.id,
+                    "tool_name": tool_name,
+                    "original": original,
+                    "current": current,
+                    "drifted": bool(metadata_drift or version_drift),
+                }
+            )
+        return {
+            "run_id": run_id,
+            "decision_count": len(decisions),
+            "drift_count": sum(item["drifted"] for item in decisions),
+            "decisions": decisions,
+        }
 
 
 mcp_policy_service = MCPPolicyService()

@@ -56,9 +56,7 @@ class RunStateRepository:
             query = query.filter(AgentRun.user_id == user_id)
         return query.first()
 
-    def get_run_logs(
-        self, db: Session, run_id: int, user_id: int | None = None
-    ) -> list[ToolCallLog]:
+    def get_run_logs(self, db: Session, run_id: int, user_id: int | None = None) -> list[ToolCallLog]:
         query = db.query(ToolCallLog).join(AgentRun).filter(ToolCallLog.agent_run_id == run_id)
         if user_id is not None:
             query = query.filter(AgentRun.user_id == user_id)
@@ -78,7 +76,10 @@ class RunStateRepository:
             if status in ("completed", "error", "cancelled"):
                 metrics.increment(
                     "agent_runs",
-                    labels={"status": status, "org": str(agent_run.organization_id) if agent_run.organization_id else "none"},
+                    labels={
+                        "status": status,
+                        "org": str(agent_run.organization_id) if agent_run.organization_id else "none",
+                    },
                 )
         except Exception:  # noqa: BLE001 - 指标失败不影响业务
             pass

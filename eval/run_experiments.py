@@ -7,7 +7,6 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from eval.common import ensure_eval_llm_ready, set_eval_seed
 from eval.bundle_utils import (
     DEFAULT_BASELINE_SNAPSHOT_PATH,
     DEFAULT_DATASET_PATH,
@@ -17,8 +16,10 @@ from eval.bundle_utils import (
     load_bundle_meta,
     resolve_eval_paths,
 )
+from eval.common import ensure_eval_llm_ready, set_eval_seed
 from eval.index_eval_corpus import index_corpus, load_manifest
 from eval.run_eval import load_dataset, run_eval
+
 
 def load_matrix(path: Path) -> list[dict]:
     with path.open("r", encoding="utf-8") as file:
@@ -274,22 +275,32 @@ def run_experiments(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run batch RAG experiments over eval fixtures")
-    parser.add_argument("--bundle-dir", default=None, help="Directory of an eval bundle containing manifest/dataset/matrix")
+    parser.add_argument(
+        "--bundle-dir", default=None, help="Directory of an eval bundle containing manifest/dataset/matrix"
+    )
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH), help="Path to corpus manifest json")
     parser.add_argument("--matrix", default=str(DEFAULT_MATRIX_PATH), help="Path to experiment matrix json")
     parser.add_argument("--dataset", default=str(DEFAULT_DATASET_PATH), help="Path to qa dataset json")
     parser.add_argument("--user-id", type=int, default=9000, help="User id filter for RAG evaluation")
     parser.add_argument("--experiment", default=None, help="Optional single experiment name to run")
-    parser.add_argument("--skip-index", action="store_true", help="Use existing Chroma index and skip re-indexing corpus")
+    parser.add_argument(
+        "--skip-index", action="store_true", help="Use existing Chroma index and skip re-indexing corpus"
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible evaluation")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Directory for summary and badcase artifacts")
+    parser.add_argument(
+        "--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Directory for summary and badcase artifacts"
+    )
     parser.add_argument(
         "--baseline-path",
         default=str(DEFAULT_BASELINE_SNAPSHOT_PATH),
         help="Path of the baseline snapshot used for regression checks",
     )
-    parser.add_argument("--write-artifacts", action="store_true", help="Write summary and per-experiment badcase json files")
-    parser.add_argument("--check-regression", action="store_true", help="Compare current baseline result with a saved baseline snapshot")
+    parser.add_argument(
+        "--write-artifacts", action="store_true", help="Write summary and per-experiment badcase json files"
+    )
+    parser.add_argument(
+        "--check-regression", action="store_true", help="Compare current baseline result with a saved baseline snapshot"
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print result json")
     return parser.parse_args()
 

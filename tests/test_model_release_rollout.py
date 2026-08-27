@@ -79,7 +79,9 @@ class ModelReleaseServiceTests(unittest.TestCase):
 
     def test_visible_rollout_requires_passed_offline_evaluation(self):
         release = model_release_service.create_draft(
-            self.db, spec=self._spec(evaluation_gate=None), actor_id=None,
+            self.db,
+            spec=self._spec(evaluation_gate=None),
+            actor_id=None,
         )
         with self.assertRaisesRegex(ValueError, "offline evaluation"):
             model_release_service.activate(self.db, version=release.version, actor_id=None)
@@ -134,15 +136,23 @@ class ModelReleaseServiceTests(unittest.TestCase):
 
     def test_guardrail_rolls_back_active_release_after_error_budget_breach(self):
         release = model_release_service.create_draft(
-            self.db, spec=self._spec(rollout_percentage=100), actor_id=None,
+            self.db,
+            spec=self._spec(rollout_percentage=100),
+            actor_id=None,
         )
         model_release_service.activate(self.db, version=release.version, actor_id=None)
         self.db.add_all(
             [
                 LLMCallLog(
-                    module_name="email", action="email_generate", model_name="qwen-max",
-                    status=status, input_tokens=100, output_tokens=100, duration_ms=duration,
-                    model_release_version=release.version, traffic_type="serving",
+                    module_name="email",
+                    action="email_generate",
+                    model_name="qwen-max",
+                    status=status,
+                    input_tokens=100,
+                    output_tokens=100,
+                    duration_ms=duration,
+                    model_release_version=release.version,
+                    traffic_type="serving",
                 )
                 for status, duration in (("success", 500), ("error", 600), ("error", 700))
             ]
@@ -159,11 +169,15 @@ class ModelReleaseServiceTests(unittest.TestCase):
 
     def test_rollback_restores_previous_release_for_the_same_action(self):
         first = model_release_service.create_draft(
-            self.db, spec=self._spec(version="qwen-max-v1", rollout_percentage=100), actor_id=None,
+            self.db,
+            spec=self._spec(version="qwen-max-v1", rollout_percentage=100),
+            actor_id=None,
         )
         model_release_service.activate(self.db, version=first.version, actor_id=None)
         second = model_release_service.create_draft(
-            self.db, spec=self._spec(version="qwen-max-v2", rollout_percentage=100), actor_id=None,
+            self.db,
+            spec=self._spec(version="qwen-max-v2", rollout_percentage=100),
+            actor_id=None,
         )
         model_release_service.activate(self.db, version=second.version, actor_id=None)
         self.db.refresh(first)
@@ -215,7 +229,9 @@ class ModelGatewayReleaseRoutingTests(unittest.IsolatedAsyncioTestCase):
             serve_candidate=serve,
             shadow_candidate=shadow,
             eligible=True,
-            reason="complexity=simple;risk=low;ab_candidate" if serve else "complexity=simple;risk=low;shadow_candidate",
+            reason="complexity=simple;risk=low;ab_candidate"
+            if serve
+            else "complexity=simple;risk=low;shadow_candidate",
             signals=RoutingSignals(complexity="simple", risk_level="low", latency_budget_ms=60000),
         )
 
@@ -234,9 +250,13 @@ class ModelGatewayReleaseRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ab_candidate_is_served_through_canary_target(self):
         request = self._request()
-        with patch("app.core.llm_client.model_release_service.resolve", return_value=self._decision(serve=True, shadow=False)), patch.object(
-            self.gateway, "_request_text_once", new=AsyncMock(return_value="candidate response")
-        ) as call:
+        with (
+            patch(
+                "app.core.llm_client.model_release_service.resolve",
+                return_value=self._decision(serve=True, shadow=False),
+            ),
+            patch.object(self.gateway, "_request_text_once", new=AsyncMock(return_value="candidate response")) as call,
+        ):
             result = await self.gateway._request_text_with_routing(source_text=request.prompt or "", request=request)
 
         self.assertEqual(result, "candidate response")
@@ -246,9 +266,13 @@ class ModelGatewayReleaseRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_shadow_request_is_not_billable_and_does_not_delay_serving_response(self):
         request = self._request()
-        with patch("app.core.llm_client.model_release_service.resolve", return_value=self._decision(serve=False, shadow=True)), patch.object(
-            self.gateway, "_request_text_once", new=AsyncMock(return_value="response")
-        ) as call:
+        with (
+            patch(
+                "app.core.llm_client.model_release_service.resolve",
+                return_value=self._decision(serve=False, shadow=True),
+            ),
+            patch.object(self.gateway, "_request_text_once", new=AsyncMock(return_value="response")) as call,
+        ):
             result = await self.gateway._request_text_with_routing(source_text=request.prompt or "", request=request)
             await asyncio.sleep(0)
 

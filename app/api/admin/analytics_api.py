@@ -648,9 +648,7 @@ def approve_agent_eval_candidate(
             review_note=req.review_note,
         )
     except ValueError as exc:
-        raise api_error(
-            400, "Agent 评测样本审核失败", code="AGENT_EVAL_REVIEW_INVALID", detail=str(exc)
-        ) from exc
+        raise api_error(400, "Agent 评测样本审核失败", code="AGENT_EVAL_REVIEW_INVALID", detail=str(exc)) from exc
     return {"id": row.id, "status": row.status, "approved_at": row.approved_at}
 
 
@@ -668,16 +666,12 @@ def reject_agent_eval_candidate(
             db, candidate_id=candidate_id, reviewer_id=current_user.id, review_note=req.review_note
         )
     except ValueError as exc:
-        raise api_error(
-            404, "Agent 评测样本不存在", code="AGENT_EVAL_CANDIDATE_NOT_FOUND", detail=str(exc)
-        ) from exc
+        raise api_error(404, "Agent 评测样本不存在", code="AGENT_EVAL_CANDIDATE_NOT_FOUND", detail=str(exc)) from exc
     return {"id": row.id, "status": row.status}
 
 
 @router.post("/agent-evals/export")
-def export_agent_eval_dataset(
-    db: Session = Depends(get_db), current_user: User = Depends(require_admin_user)
-):
+def export_agent_eval_dataset(db: Session = Depends(get_db), current_user: User = Depends(require_admin_user)):
     from app.services.agent.online_eval_service import online_eval_service
 
     _ = current_user
@@ -739,7 +733,10 @@ def slo_overview(
         result[metric] = {
             "description": _SLO_METRIC_LABELS[metric],
             "series": ops_aggregation_service.slo_series(
-                db, metric_name=metric, days=days, org_id=org_id,
+                db,
+                metric_name=metric,
+                days=days,
+                org_id=org_id,
             ),
         }
     return {"days": days, "org_id": org_id, "metrics": result}
@@ -770,7 +767,10 @@ def slo_status(
     result: dict = {}
     for metric, target in targets.items():
         stats = ops_aggregation_service.slo_rates(
-            db, metric_name=metric, days=days, org_id=org_id,
+            db,
+            metric_name=metric,
+            days=days,
+            org_id=org_id,
         )
         items = []
         for item in stats["items"]:
@@ -784,7 +784,10 @@ def slo_status(
         }
     # API p95 目标：取窗口内各桶 p95 的最大值对比（近似口径，见交付文档）。
     p95_series = ops_aggregation_service.slo_series(
-        db, metric_name="api_request_duration", days=days, org_id=org_id,
+        db,
+        metric_name="api_request_duration",
+        days=days,
+        org_id=org_id,
     )
     p95_values = [item["p95_value"] for item in p95_series if item.get("p95_value") is not None]
     result["api_request_duration"]["latency_p95_ms"] = max(p95_values) if p95_values else None

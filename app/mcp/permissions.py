@@ -51,7 +51,4 @@ def all_agent_types() -> Sequence[str]:
 
 # Kept as a read-only compatibility view for callers that imported the old
 # matrix. New authorization code must use policy_engine.evaluate().
-AGENT_TOOL_ALLOW: dict[str, set[str]] = {
-    agent_type: allowed_tools_for(agent_type)
-    for agent_type in all_agent_types()
-}
+AGENT_TOOL_ALLOW: dict[str, set[str]] = {agent_type: allowed_tools_for(agent_type) for agent_type in all_agent_types()}

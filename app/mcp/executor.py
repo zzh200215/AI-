@@ -150,11 +150,17 @@ class AgentToolExecutor:
         )
         if not decision.allowed:
             self._audit(
-                db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                user_id=user_id, organization_id=organization_id,
-                tool_name=tool_name, tool_version=contract.version,
+                db=db,
+                run_id=agent_run_id,
+                step=step_id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                tool_name=tool_name,
+                tool_version=contract.version,
                 event_type=EVENT_PERMISSION_DECISION,
-                decision=decision.to_dict(), status="denied",
+                decision=decision.to_dict(),
+                status="denied",
                 duration_ms=duration_ms(),
             )
             return self._guard.denied_result(decision), serialized_input
@@ -163,11 +169,17 @@ class AgentToolExecutor:
         # complete decision stream to detect policy-version or authorization
         # drift, not only calls that were blocked.
         self._audit(
-            db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-            user_id=user_id, organization_id=organization_id,
-            tool_name=tool_name, tool_version=contract.version,
+            db=db,
+            run_id=agent_run_id,
+            step=step_id,
+            trace_id=trace_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            tool_name=tool_name,
+            tool_version=contract.version,
             event_type=EVENT_PERMISSION_DECISION,
-            decision=decision.to_dict(), status="allowed",
+            decision=decision.to_dict(),
+            status="allowed",
             duration_ms=duration_ms(),
         )
 
@@ -186,11 +198,18 @@ class AgentToolExecutor:
                     "mcp_error_code": "AGENT_CANCELLED",
                 }
                 self._audit(
-                    db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                    user_id=user_id, organization_id=organization_id,
-                    tool_name=tool_name, tool_version=contract.version,
-                    event_type=EVENT_PERMISSION_DECISION, status="cancelled",
-                    error_category=ERROR_CATEGORY_CANCELLED, duration_ms=duration_ms(),
+                    db=db,
+                    run_id=agent_run_id,
+                    step=step_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    tool_name=tool_name,
+                    tool_version=contract.version,
+                    event_type=EVENT_PERMISSION_DECISION,
+                    status="cancelled",
+                    error_category=ERROR_CATEGORY_CANCELLED,
+                    duration_ms=duration_ms(),
                 )
                 return result, serialized_input
 
@@ -211,11 +230,18 @@ class AgentToolExecutor:
                 "mcp_error_code": "APPROVAL_CONTEXT_REQUIRED",
             }
             self._audit(
-                db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                user_id=user_id, organization_id=organization_id,
-                tool_name=tool_name, tool_version=contract.version,
-                event_type=EVENT_PERMISSION_DECISION, status="denied",
-                summary={"approval_context_missing": True}, duration_ms=duration_ms(),
+                db=db,
+                run_id=agent_run_id,
+                step=step_id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                tool_name=tool_name,
+                tool_version=contract.version,
+                event_type=EVENT_PERMISSION_DECISION,
+                status="denied",
+                summary={"approval_context_missing": True},
+                duration_ms=duration_ms(),
             )
             return result, serialized_input
         if approval_required:
@@ -232,12 +258,18 @@ class AgentToolExecutor:
                 data_scope=decision.data_scope,
             )
             self._audit(
-                db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                user_id=user_id, organization_id=organization_id,
-                tool_name=tool_name, tool_version=contract.version,
+                db=db,
+                run_id=agent_run_id,
+                step=step_id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                tool_name=tool_name,
+                tool_version=contract.version,
                 event_type=EVENT_APPROVAL_CREATED,
                 summary={"approval_request_id": approval.id, "risk_level": approval.risk_level},
-                status="pending", duration_ms=duration_ms(),
+                status="pending",
+                duration_ms=duration_ms(),
             )
             return _approval_required_result(
                 tool_name=tool_name,
@@ -272,11 +304,18 @@ class AgentToolExecutor:
                     cached.setdefault("data", {})
                     cached["data"]["idempotent_replay"] = True
                     self._audit(
-                        db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                        user_id=user_id, organization_id=organization_id,
-                        tool_name=tool_name, tool_version=contract.version,
-                        event_type=EVENT_TOOL_EXECUTED, status="replayed",
-                        summary={"idempotency_key": idempotency_key}, duration_ms=duration_ms(),
+                        db=db,
+                        run_id=agent_run_id,
+                        step=step_id,
+                        trace_id=trace_id,
+                        user_id=user_id,
+                        organization_id=organization_id,
+                        tool_name=tool_name,
+                        tool_version=contract.version,
+                        event_type=EVENT_TOOL_EXECUTED,
+                        status="replayed",
+                        summary={"idempotency_key": idempotency_key},
+                        duration_ms=duration_ms(),
                     )
                     return cached, serialized_input
 
@@ -325,18 +364,30 @@ class AgentToolExecutor:
         error_category = classify_error(result.get("error"), result.get("mcp_error_code"))
         if result.get("mcp_error_code") == "AGENT_TOOL_TIMEOUT":
             self._audit(
-                db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                user_id=user_id, organization_id=organization_id,
-                tool_name=tool_name, tool_version=contract.version,
+                db=db,
+                run_id=agent_run_id,
+                step=step_id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                tool_name=tool_name,
+                tool_version=contract.version,
                 event_type=EVENT_TIMEOUT,
                 summary={"timeout_seconds": timeout_seconds},
-                error_category=error_category, status="timeout", duration_ms=duration_ms(),
+                error_category=error_category,
+                status="timeout",
+                duration_ms=duration_ms(),
             )
         else:
             self._audit(
-                db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                user_id=user_id, organization_id=organization_id,
-                tool_name=tool_name, tool_version=contract.version,
+                db=db,
+                run_id=agent_run_id,
+                step=step_id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                tool_name=tool_name,
+                tool_version=contract.version,
                 event_type=EVENT_TOOL_EXECUTED,
                 summary={"success": bool(result.get("success")), "error_category": error_category},
                 error_category=error_category,
@@ -352,9 +403,14 @@ class AgentToolExecutor:
                 result=result,
             )
             self._audit(
-                db=db, run_id=agent_run_id, step=step_id, trace_id=trace_id,
-                user_id=user_id, organization_id=organization_id,
-                tool_name=tool_name, tool_version=contract.version,
+                db=db,
+                run_id=agent_run_id,
+                step=step_id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                tool_name=tool_name,
+                tool_version=contract.version,
                 event_type=EVENT_RETRIEVAL_RESULT,
                 summary={"success": bool(result.get("success"))},
                 status="success" if result.get("success") else "error",

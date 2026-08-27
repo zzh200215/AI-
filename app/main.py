@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import redis
@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import app.tasks  # noqa: F401  (显式注册 Celery 任务：应用进程内 .delay() 需任务已注册)
 from app.api.admin import analytics_api, dashboard_api, model_release_api, pilot_feedback_api, prompt_api
 from app.api.agent import agent_api, mcp_api
 from app.api.auth import account_deletion_api, auth_api
@@ -18,11 +19,18 @@ from app.api.channels import feishu_api, miniapp_api, outbound_api
 from app.api.conversation import chat_api, memory_api, ws_api
 from app.api.developer import api_key_api, legal_platform_api
 from app.api.documents import document_api, document_conflict_api
-from app.api.legal import legal_api, legal_approval_api, legal_billing_api, legal_case_api, legal_contract_api, legal_domain_api, legal_portal_api, org_member_api
+from app.api.legal import (
+    legal_api,
+    legal_approval_api,
+    legal_billing_api,
+    legal_case_api,
+    legal_contract_api,
+    legal_domain_api,
+    legal_portal_api,
+    org_member_api,
+)
 from app.api.org import org_api
 from app.api.tasks import task_api
-import app.tasks  # noqa: F401  (显式注册 Celery 任务：应用进程内 .delay() 需任务已注册)
-from app.core.config import get_settings
 from app.core.api_response import (
     ApiResponseMiddleware,
     http_exception_handler,
@@ -30,10 +38,11 @@ from app.core.api_response import (
     unhandled_exception_handler,
     validation_exception_handler,
 )
+from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.model_gateway import model_gateway
-from app.core.oplog_middleware import OperationLogMiddleware
 from app.core.obs_middleware import ObservabilityContextMiddleware
+from app.core.oplog_middleware import OperationLogMiddleware
 from app.core.telemetry import init_telemetry
 
 
@@ -136,16 +145,14 @@ def _inject_unified_contract(schema: dict) -> dict:
     schema["info"]["x-api-version"] = "1"
     # 错误码注册表随规范固化（contract gate 检测错误码删除/变更这一 breaking change）
     from app.core import error_codes as error_codes_module
-    schema["x-error-codes"] = sorted({
-        value for name, value in vars(error_codes_module).items()
-        if name.isupper() and isinstance(value, str)
-    })
+
+    schema["x-error-codes"] = sorted(
+        {value for name, value in vars(error_codes_module).items() if name.isupper() and isinstance(value, str)}
+    )
     components = schema.setdefault("components", {})
     schemas = components.setdefault("schemas", {})
     for model in (SuccessEnvelope, ErrorEnvelope, PagePayload, JobOut):
-        schemas[model.__name__] = model.model_json_schema(
-            ref_template="#/components/schemas/{model}"
-        )
+        schemas[model.__name__] = model.model_json_schema(ref_template="#/components/schemas/{model}")
     components.setdefault("securitySchemes", {})["ApiKeyHeader"] = {
         "type": "apiKey",
         "in": "header",
@@ -170,11 +177,7 @@ def _inject_unified_contract(schema: dict) -> dict:
             if (method.lower(), path) in _ASYNC_CREATE_ENDPOINTS:
                 op.setdefault("responses", {})["202"] = {
                     "description": "已接受：任务已创建，通过 status_url 查询结果",
-                    "content": {
-                        "application/json": {
-                            "schema": {"$ref": "#/components/schemas/JobOut"}
-                        }
-                    },
+                    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/JobOut"}}},
                 }
     return schema
 
@@ -219,7 +222,11 @@ def health_check():
     except Exception:
         checks["redis"] = {"status": "error"}
 
-    model_headers = {"Authorization": f"Bearer {settings.LLM_API_KEY}"} if settings.LLM_PROVIDER != "ollama" and settings.LLM_API_KEY else {}
+    model_headers = (
+        {"Authorization": f"Bearer {settings.LLM_API_KEY}"}
+        if settings.LLM_PROVIDER != "ollama" and settings.LLM_API_KEY
+        else {}
+    )
     model_health_url = (
         f"{settings.LLM_API_BASE_URL.rstrip('/')}/models"
         if settings.LLM_PROVIDER != "ollama"
@@ -237,7 +244,7 @@ def health_check():
     overall_status = "ok" if all(item["status"] == "ok" for item in checks.values()) else "degraded"
     return {
         "status": overall_status,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "checks": checks,
     }
 
@@ -245,7 +252,7 @@ def health_check():
 @app.get("/api/health/live")
 def liveness_check():
     """Process-level probe: does not depend on external services."""
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
 
 @app.get("/api/health/ready")
@@ -266,4 +273,4 @@ def readiness_check():
     except Exception:
         checks["redis"] = "error"
     status = "ok" if all(value == "ok" for value in checks.values()) else "degraded"
-    return {"status": status, "checks": checks, "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {"status": status, "checks": checks, "timestamp": datetime.now(UTC).isoformat()}

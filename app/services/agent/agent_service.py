@@ -1,9 +1,9 @@
 import asyncio
 import json
-import re
 import time
-from datetime import timedelta
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, timedelta
+from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -13,7 +13,6 @@ from app.core.time import utc_now
 from app.mcp.executor import tool_executor
 from app.mcp.permission_guard import permission_guard
 from app.mcp.permissions import (
-    allowed_tools_for,
     canonical_agent_type,
 )
 from app.mcp.registry import mcp_registry
@@ -21,33 +20,21 @@ from app.models.agent import AgentRun, ToolCallLog
 from app.models.user import User
 from app.services.agent.agent_approval_service import agent_approval_service
 from app.services.agent.agent_audit import (
-    EVENT_COMPENSATION,
     EVENT_ERROR,
     EVENT_PLAN_CREATED,
-    EVENT_RUN_STATE_CHANGED,
     agent_audit_service,
 )
-from app.services.agent.agent_observability import observe_agent_run, record_state_transition
 from app.services.agent.agent_harness_service import get_harness_profile
-from app.services.agent.agent_json import extract_json_object as _extract_json_object
 from app.services.agent.agent_json import json_dumps as _json_dumps
 from app.services.agent.agent_json import json_loads_dict as _json_loads_dict
 from app.services.agent.agent_mixins import EvidenceVerificationMixin
+from app.services.agent.agent_observability import observe_agent_run, record_state_transition
 from app.services.agent.agent_planner import Planner
 from app.services.agent.agent_planner import planner as _planner_default
 from app.services.agent.agent_prompts import (
-    EVIDENCE_GATED_WRITE_TOOLS,
-    EVIDENCE_SOURCE_TOOLS,
     PARALLEL_READ_ONLY_TOOLS,
-    PARALLEL_READ_ONLY_WORKER_PAIRS,
     PARALLEL_READ_ONLY_WORKERS,
-    POLICY_GUARDRAIL_ROLE,
-    PRIORITY_FLOWS,
-    SUB_AGENT_DESCRIPTIONS,
     SUB_AGENTS,
-    SUPERVISOR_ARTIFACT_TYPES,
-    SUPERVISOR_RISK_LEVELS,
-    TOOL_DESCRIPTIONS,
 )
 from app.services.agent.agent_prompts import (
     build_demo_plan_preview as _build_demo_plan_preview,
@@ -110,13 +97,11 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         handoff_text = ""
         if handoff_context:
             handoff_text = (
-                "\n\n上游 Worker 已完成，请仅使用以下结构化交接内容继续本职责：\n"
-                f"{_json_dumps(handoff_context)}"
+                "\n\n上游 Worker 已完成，请仅使用以下结构化交接内容继续本职责：\n" f"{_json_dumps(handoff_context)}"
             )
         memory_text = f"\n\n用户会话记忆（仅作辅助上下文）：\n{memory_context}" if memory_context else ""
         task_text = (
-            "\n\n结构化任务协议（权限由服务端强制执行，不得自行修改）：\n"
-            f"{_json_dumps(task_contract)}"
+            "\n\n结构化任务协议（权限由服务端强制执行，不得自行修改）：\n" f"{_json_dumps(task_contract)}"
             if task_contract
             else ""
         )
@@ -170,7 +155,10 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
 
             document_id = data.get("document_id") or input_params.get("document_id")
-            if log.tool_name in {"document_summary_tool", "document_risk_tool", "document_search_tool"} and document_id is not None:
+            if (
+                log.tool_name in {"document_summary_tool", "document_risk_tool", "document_search_tool"}
+                and document_id is not None
+            ):
                 add_artifact(
                     "documents",
                     document_id,
@@ -217,7 +205,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
 
         return artifacts
 
-    def _record_run_summary(self, *, run: AgentRun, status: str, duration_ms: int, error_message: str | None = None) -> None:
+    def _record_run_summary(
+        self, *, run: AgentRun, status: str, duration_ms: int, error_message: str | None = None
+    ) -> None:
         parsed_result = _json_loads_dict(run.result)
         llm_observability_service.log_event(
             module_name="agent",
@@ -400,9 +390,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             "pending_tool_name": tool_name,
             "max_steps": max_steps,
             "supervisor_plan": supervisor_plan,
-            "artifacts": self._collect_run_artifacts(
-                self.get_run_logs(agent_run_id, db, user_id=user_id)
-            ),
+            "artifacts": self._collect_run_artifacts(self.get_run_logs(agent_run_id, db, user_id=user_id)),
         }
 
     def _save_run(self, db: Session, agent_run: AgentRun, **fields) -> AgentRun:
@@ -499,11 +487,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         messages.append(
             {
                 "role": "user",
-                "content": (
-                    "Observation:\n"
-                    f"{observation}\n\n"
-                    "请基于最新 observation 决定下一步，只输出 JSON。"
-                ),
+                "content": ("Observation:\n" f"{observation}\n\n" "请基于最新 observation 决定下一步，只输出 JSON。"),
             }
         )
 
@@ -860,12 +844,14 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                 raise ValueError("Existing Agent run belongs to a different user")
             if existing_run.status != "running":
                 raise ValueError("Existing Agent run is not dispatchable")
-            if forced_worker and existing_run.agent_type and canonical_agent_type(existing_run.agent_type) != forced_worker:
+            if (
+                forced_worker
+                and existing_run.agent_type
+                and canonical_agent_type(existing_run.agent_type) != forced_worker
+            ):
                 raise ValueError("Forced worker does not match delegated Agent run")
             if existing_run.authorization_snapshot_id:
-                authorization_service.assert_snapshot(
-                    db, existing_run.authorization_snapshot_id, user_id=user_id
-                )
+                authorization_service.assert_snapshot(db, existing_run.authorization_snapshot_id, user_id=user_id)
             agent_run = existing_run
             trace_id = agent_run.trace_id or new_trace_id()
             organization_id = agent_run.organization_id
@@ -993,8 +979,12 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         )
         try:
             agent_audit_service.record(
-                db=db, event_type=EVENT_PLAN_CREATED, run_id=agent_run.id, trace_id=trace_id,
-                user_id=user_id, organization_id=organization_id,
+                db=db,
+                event_type=EVENT_PLAN_CREATED,
+                run_id=agent_run.id,
+                trace_id=trace_id,
+                user_id=user_id,
+                organization_id=organization_id,
                 decision={"plan_source": supervisor_plan.get("plan_source"), "workers": worker_plan},
                 status="created",
             )
@@ -1034,9 +1024,13 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                 db.rollback()
             try:
                 agent_audit_service.record(
-                    db=db, event_type=EVENT_ERROR, run_id=result_run.id,
-                    trace_id=result_run.trace_id, user_id=result_run.user_id,
-                    organization_id=result_run.organization_id, status="error",
+                    db=db,
+                    event_type=EVENT_ERROR,
+                    run_id=result_run.id,
+                    trace_id=result_run.trace_id,
+                    user_id=result_run.user_id,
+                    organization_id=result_run.organization_id,
+                    status="error",
                     summary={"error_category": "unhandled_exception"},
                 )
             except Exception:  # noqa: BLE001
@@ -1122,12 +1116,12 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             if run_deadline.tzinfo is None:
                 deadline_naive = run_deadline
             else:
-                from datetime import timezone as _tz
-
-                deadline_naive = run_deadline.astimezone(_tz.utc).replace(tzinfo=None)
+                deadline_naive = run_deadline.astimezone(UTC).replace(tzinfo=None)
             if utc_now() > deadline_naive:
                 self._save_run(
-                    db, agent_run, status="partial",
+                    db,
+                    agent_run,
+                    status="partial",
                     final_answer="执行已超时，待审批操作未执行，请重新发起。",
                 )
                 self._sync_a2a_delegation(db, agent_run)
@@ -1138,7 +1132,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         master_agent = str(run_payload.get("master_agent") or "supervisor_agent")
         supervisor_plan = snapshot.get("supervisor_plan") if isinstance(snapshot.get("supervisor_plan"), dict) else {}
         if not supervisor_plan:
-            supervisor_plan = run_payload.get("supervisor_plan") if isinstance(run_payload.get("supervisor_plan"), dict) else {}
+            supervisor_plan = (
+                run_payload.get("supervisor_plan") if isinstance(run_payload.get("supervisor_plan"), dict) else {}
+            )
         worker_plan = supervisor_plan.get("workers") if isinstance(supervisor_plan.get("workers"), list) else []
         if not worker_plan:
             worker_plan = snapshot.get("worker_plan") if isinstance(snapshot.get("worker_plan"), list) else []
@@ -1149,7 +1145,9 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         handoffs = snapshot.get("handoffs") if isinstance(snapshot.get("handoffs"), list) else []
         if not handoffs:
             handoffs = supervisor_plan.get("handoffs") if isinstance(supervisor_plan.get("handoffs"), list) else []
-        worker_agent = canonical_agent_type(str(snapshot.get("worker_agent") or run_payload.get("worker_agent") or worker_plan[-1]))
+        worker_agent = canonical_agent_type(
+            str(snapshot.get("worker_agent") or run_payload.get("worker_agent") or worker_plan[-1])
+        )
         task_contract = snapshot.get("task_contract") if isinstance(snapshot.get("task_contract"), dict) else {}
         if not task_contract:
             candidate = supervisor_plan.get("active_task_contract") or supervisor_plan.get("task_contract")
@@ -1216,9 +1214,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             raise ValueError(f"Approval parameters changed; re-approval required: {exc}")
 
         # 执行前原子认领 approved → executed（CAS），防止并发恢复导致写工具重复执行。
-        if not agent_approval_service.try_claim_execution(
-            db=db, approval_id=approval.id, user_id=user_id
-        ):
+        if not agent_approval_service.try_claim_execution(db=db, approval_id=approval.id, user_id=user_id):
             self._save_run(db, agent_run, status="running", final_answer="审批已被并发恢复流程执行，本次请求跳过。")
             raise ValueError("Approval already claimed by a concurrent resume")
 
@@ -1351,5 +1347,6 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         result_run = final_state.get("final_run") or agent_run
         self._sync_a2a_delegation(db, result_run)
         return result_run
+
 
 agent_service = AgentService()

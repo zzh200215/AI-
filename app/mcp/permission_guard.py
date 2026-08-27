@@ -78,9 +78,7 @@ class PermissionGuard:
             authorization_service.assert_snapshot(db, snapshot_id, user_id=user_id)
             return PermissionDecision(allowed=True, decision_kind=DECISION_KIND_SNAPSHOT)
         except Exception as exc:  # noqa: BLE001
-            code = getattr(getattr(exc, "detail", None), "get", lambda *_: "authz_changed")(
-                "code", "authz_changed"
-            )
+            code = getattr(getattr(exc, "detail", None), "get", lambda *_: "authz_changed")("code", "authz_changed")
             return PermissionDecision(
                 allowed=False,
                 reason="Agent authorization snapshot is no longer valid",
@@ -130,7 +128,11 @@ class PermissionGuard:
         return PermissionDecision(allowed=True, decision_kind=DECISION_KIND_PLAN)
 
     def denied_result(self, decision: PermissionDecision) -> dict[str, Any]:
-        mcp_code = "AUTHZ_CHANGED" if decision.decision_kind == DECISION_KIND_SNAPSHOT else decision.error_code or "MCP_PERMISSION_DENIED"
+        mcp_code = (
+            "AUTHZ_CHANGED"
+            if decision.decision_kind == DECISION_KIND_SNAPSHOT
+            else decision.error_code or "MCP_PERMISSION_DENIED"
+        )
         return {
             "success": False,
             "message": decision.reason or "Permission denied",

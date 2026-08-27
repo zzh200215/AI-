@@ -115,9 +115,7 @@ class A2ADelegation(Base):
     """
 
     __tablename__ = "a2a_delegations"
-    __table_args__ = (
-        UniqueConstraint("parent_run_id", "idempotency_key", name="uq_a2a_delegations_parent_key"),
-    )
+    __table_args__ = (UniqueConstraint("parent_run_id", "idempotency_key", name="uq_a2a_delegations_parent_key"),)
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     delegation_id = Column(String(64), nullable=False, unique=True, index=True)

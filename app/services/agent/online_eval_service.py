@@ -94,7 +94,9 @@ class OnlineEvalService:
         db.refresh(candidate)
         return candidate
 
-    def reject(self, db: Session, *, candidate_id: int, reviewer_id: int, review_note: str | None = None) -> AgentEvalCandidate:
+    def reject(
+        self, db: Session, *, candidate_id: int, reviewer_id: int, review_note: str | None = None
+    ) -> AgentEvalCandidate:
         candidate = db.query(AgentEvalCandidate).filter_by(id=candidate_id).first()
         if not candidate:
             raise ValueError("Agent eval candidate not found")
@@ -121,14 +123,16 @@ class OnlineEvalService:
                 expected_outcome = json.loads(row.expected_outcome_json or "{}")
             except json.JSONDecodeError:
                 continue
-            cases.append({
-                "id": f"agent_online_{row.id}",
-                "candidate_id": row.id,
-                "trace_id": row.trace_id,
-                "failure_type": row.failure_type,
-                "input": evaluation_input,
-                "expected": expected_outcome,
-            })
+            cases.append(
+                {
+                    "id": f"agent_online_{row.id}",
+                    "candidate_id": row.id,
+                    "trace_id": row.trace_id,
+                    "failure_type": row.failure_type,
+                    "input": evaluation_input,
+                    "expected": expected_outcome,
+                }
+            )
             if row.status == APPROVED:
                 row.status = EXPORTED
                 row.exported_at = utc_now()

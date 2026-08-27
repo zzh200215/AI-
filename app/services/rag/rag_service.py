@@ -6,6 +6,7 @@ import time
 from app.core.async_utils import run_async
 from app.core.config import get_settings
 from app.core.llm_client import llm_client
+from app.core.telemetry import observe_span
 from app.services.llm.prompt_service import prompt_service
 from app.services.rag._helpers import (
     build_citation_locator,
@@ -42,9 +43,8 @@ from app.services.rag.query_rewrite import QueryRewriteMixin
 from app.services.rag.rag_runtime import resolve_runtime_config
 from app.services.rag.rerank import build_reranker
 from app.services.rag.retrieval import RetrievalMixin
-from app.services.rag.vector_store import build_vector_store
 from app.services.rag.trace import TRACE_VERSION, query_summary, score_margin, set_last_trace
-from app.core.telemetry import observe_span
+from app.services.rag.vector_store import build_vector_store
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -104,9 +104,14 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
     def _compact_metadata(metadata: dict) -> dict:
         return compact_metadata(metadata)
 
-    def _build_where(self, document_id: int | None = None, user_id: int | None = None,
-                     knowledge_base_id: int | None = None, document_status: str | None = None,
-                     authorized_document_ids: list[int] | None = None) -> dict | None:
+    def _build_where(
+        self,
+        document_id: int | None = None,
+        user_id: int | None = None,
+        knowledge_base_id: int | None = None,
+        document_status: str | None = None,
+        authorized_document_ids: list[int] | None = None,
+    ) -> dict | None:
         """构造检索过滤子句。
 
         传入 authorized_document_ids 时，用“document_id IN 授权集”作为权限过滤，
@@ -237,7 +242,7 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
                 "rerank_duration_ms": int((time.time() - rerank_started) * 1000),
                 "status": "success" if dense_candidates or keyword_candidates else "degraded",
                 "rerank_status": rerank_status,
-                "top_score": round(float((chunks[0].get("retrieval_score") or 0.0)), 4) if chunks else 0.0,
+                "top_score": round(float(chunks[0].get("retrieval_score") or 0.0), 4) if chunks else 0.0,
                 "score_margin": score_margin(chunks),
             },
         }
@@ -321,7 +326,7 @@ class RAGService(RetrievalMixin, AnswerMixin, IndexingMixin, QueryRewriteMixin):
                 "reranked_candidates": len(chunks),
                 "duration_ms": retrieval_duration_ms,
                 "status": "success" if chunks else "degraded",
-                "top_score": round(float((chunks[0].get("retrieval_score") or 0.0)), 4) if chunks else 0.0,
+                "top_score": round(float(chunks[0].get("retrieval_score") or 0.0), 4) if chunks else 0.0,
                 "score_margin": score_margin(chunks),
             },
         }

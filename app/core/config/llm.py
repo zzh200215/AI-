@@ -105,9 +105,7 @@ class LLMSettings(BaseSettings):
     @classmethod
     def validate_llm_api_key(cls, v: str) -> str:
         if not v or v in {"your-api-key", "your-dashscope-api-key", "sk-xxxxx"}:
-            raise ValueError(
-                "LLM_API_KEY必须配置有效的API密钥。请在.env文件中设置正确的值。"
-            )
+            raise ValueError("LLM_API_KEY必须配置有效的API密钥。请在.env文件中设置正确的值。")
         if len(v) < 16:
             raise ValueError("LLM_API_KEY长度不足，请检查是否正确配置")
         return v

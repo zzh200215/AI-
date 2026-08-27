@@ -68,8 +68,12 @@ def create_model_release(
     except ValueError as exc:
         raise api_error(400, "模型发布配置不合法", code="MODEL_RELEASE_INVALID", detail=str(exc)) from exc
     oplog_service.log(
-        module="model_release", action="model_release_draft_created", db=db, user_id=current_user.id,
-        target_type="model_release", target_id=row.id,
+        module="model_release",
+        action="model_release_draft_created",
+        db=db,
+        user_id=current_user.id,
+        target_type="model_release",
+        target_id=row.id,
         detail=f"version={row.version}; action={row.action}; model={row.candidate_model}",
     )
     return model_release_service.serialize(row)
@@ -84,14 +88,23 @@ def record_model_evaluation_gate(
 ):
     try:
         row = model_release_service.record_evaluation_gate(
-            db, version=version, gate=req.model_dump(), actor_id=current_user.id,
+            db,
+            version=version,
+            gate=req.model_dump(),
+            actor_id=current_user.id,
         )
     except ValueError as exc:
         code = "MODEL_RELEASE_NOT_FOUND" if str(exc) == "Model release not found" else "MODEL_EVALUATION_GATE_INVALID"
-        raise api_error(404 if code == "MODEL_RELEASE_NOT_FOUND" else 400, "模型评测门禁更新失败", code=code, detail=str(exc)) from exc
+        raise api_error(
+            404 if code == "MODEL_RELEASE_NOT_FOUND" else 400, "模型评测门禁更新失败", code=code, detail=str(exc)
+        ) from exc
     oplog_service.log(
-        module="model_release", action="model_release_evaluation_gate_recorded", db=db, user_id=current_user.id,
-        target_type="model_release", target_id=row.id,
+        module="model_release",
+        action="model_release_evaluation_gate_recorded",
+        db=db,
+        user_id=current_user.id,
+        target_type="model_release",
+        target_id=row.id,
         detail=f"version={row.version}; evaluation_status={row.evaluation_status}",
     )
     return model_release_service.serialize(row)
@@ -107,10 +120,16 @@ def activate_model_release(
         row = model_release_service.activate(db, version=version, actor_id=current_user.id)
     except ValueError as exc:
         code = "MODEL_RELEASE_NOT_FOUND" if str(exc) == "Model release not found" else "MODEL_RELEASE_ACTIVATE_INVALID"
-        raise api_error(404 if code == "MODEL_RELEASE_NOT_FOUND" else 400, "模型发布激活失败", code=code, detail=str(exc)) from exc
+        raise api_error(
+            404 if code == "MODEL_RELEASE_NOT_FOUND" else 400, "模型发布激活失败", code=code, detail=str(exc)
+        ) from exc
     oplog_service.log(
-        module="model_release", action="model_release_activated", db=db, user_id=current_user.id,
-        target_type="model_release", target_id=row.id,
+        module="model_release",
+        action="model_release_activated",
+        db=db,
+        user_id=current_user.id,
+        target_type="model_release",
+        target_id=row.id,
         detail=f"version={row.version}; rollout={row.rollout_percentage}; shadow={row.shadow_percentage}",
     )
     return model_release_service.serialize(row)
@@ -126,10 +145,17 @@ def rollback_model_release(
         row = model_release_service.rollback(db, version=version, actor_id=current_user.id)
     except ValueError as exc:
         code = "MODEL_RELEASE_NOT_FOUND" if str(exc) == "Model release not found" else "MODEL_RELEASE_ROLLBACK_INVALID"
-        raise api_error(404 if code == "MODEL_RELEASE_NOT_FOUND" else 400, "模型回滚失败", code=code, detail=str(exc)) from exc
+        raise api_error(
+            404 if code == "MODEL_RELEASE_NOT_FOUND" else 400, "模型回滚失败", code=code, detail=str(exc)
+        ) from exc
     oplog_service.log(
-        module="model_release", action="model_release_rolled_back", db=db, user_id=current_user.id,
-        target_type="model_release", target_id=row.id, detail=f"version={row.version}",
+        module="model_release",
+        action="model_release_rolled_back",
+        db=db,
+        user_id=current_user.id,
+        target_type="model_release",
+        target_id=row.id,
+        detail=f"version={row.version}",
     )
     return model_release_service.serialize(row)
 
@@ -146,8 +172,12 @@ def assess_model_release_guardrail(
     except ValueError as exc:
         raise api_error(404, "模型发布不存在", code="MODEL_RELEASE_NOT_FOUND", detail=str(exc)) from exc
     oplog_service.log(
-        module="model_release", action="model_release_guardrail_assessed", db=db, user_id=current_user.id,
-        target_type="model_release", target_id=None,
+        module="model_release",
+        action="model_release_guardrail_assessed",
+        db=db,
+        user_id=current_user.id,
+        target_type="model_release",
+        target_id=None,
         detail=f"version={version}; status={result['status']}; breaches={','.join(result['breaches']) or 'none'}; auto_rolled_back={result['auto_rolled_back']}",
     )
     return result

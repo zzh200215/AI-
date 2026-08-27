@@ -80,7 +80,7 @@ class Settings(
     字段全部来自各领域配置基类（多继承），访问方式与拆分前完全一致。
     """
 
-    def get_env_file_path(self) -> Optional[str]:
+    def get_env_file_path(self) -> str | None:
         """返回实际使用的.env文件路径"""
         env_path = ".env"
         if os.path.exists(env_path):
@@ -137,7 +137,7 @@ class Settings(
         return payload
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """获取应用配置单例"""
     try:
@@ -145,15 +145,9 @@ def get_settings() -> Settings:
         return s
     except ValueError as e:
         # 配置验证失败，提供清晰的错误信息
-        raise RuntimeError(
-            f"配置加载失败：{e}\n"
-            f"请检查.env文件并确保所有必需配置正确设置。"
-        ) from e
+        raise RuntimeError(f"配置加载失败：{e}\n" f"请检查.env文件并确保所有必需配置正确设置。") from e
     except Exception as e:
-        raise RuntimeError(
-            f"配置初始化错误：{e}\n"
-            f"请确保.env文件存在且格式正确。"
-        ) from e
+        raise RuntimeError(f"配置初始化错误：{e}\n" f"请确保.env文件存在且格式正确。") from e
 
 
 def check_config_health() -> dict:

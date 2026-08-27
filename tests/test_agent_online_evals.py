@@ -110,8 +110,12 @@ class AgentTraceSemanticsTests(unittest.TestCase):
 
         with patch("app.services.agent.agent_observability.observe_span", fake_observe):
             with observe_tool_call(
-                run_id=1, trace_id="trace-1", step=2, tool_name="document_search_tool",
-                agent_type="knowledge_agent", read_only=True,
+                run_id=1,
+                trace_id="trace-1",
+                step=2,
+                tool_name="document_search_tool",
+                agent_type="knowledge_agent",
+                read_only=True,
             ) as span:
                 record_tool_outcome(span, success=False, status="error", duration_ms=12, error_category="timeout")
             record_state_transition(run_id=1, trace_id="trace-1", from_status="running", to_status="error")
@@ -142,14 +146,18 @@ class AgentOnlineRegressionGateTests(unittest.TestCase):
         async def fake_run(case_input):
             return {"status": "completed", "tool_names": ["document_search_tool"], "failure_categories": []}
 
-        result = asyncio.run(run_cases(
-            [{
-                "id": "case-1",
-                "input": {"goal": "reviewed"},
-                "expected": {"terminal_status": "completed", "required_tool_names": ["document_search_tool"]},
-            }],
-            fake_run,
-        ))
+        result = asyncio.run(
+            run_cases(
+                [
+                    {
+                        "id": "case-1",
+                        "input": {"goal": "reviewed"},
+                        "expected": {"terminal_status": "completed", "required_tool_names": ["document_search_tool"]},
+                    }
+                ],
+                fake_run,
+            )
+        )
         self.assertTrue(result["passed"])
 
 

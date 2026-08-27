@@ -24,16 +24,86 @@ DEFAULT_POLICY_DOCUMENT: dict[str, Any] = {
     "schema_version": POLICY_SCHEMA_VERSION,
     "version": DEFAULT_POLICY_VERSION,
     "rules": [
-        {"id": "document-search", "tool": "document_search_tool", "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"], "data_scope": "documents", "risk_level": "low", "requires_approval": False},
-        {"id": "document-summary", "tool": "document_summary_tool", "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"], "data_scope": "documents", "risk_level": "low", "requires_approval": False},
-        {"id": "document-risk", "tool": "document_risk_tool", "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"], "data_scope": "documents", "risk_level": "medium", "requires_approval": False},
-        {"id": "document-conflict", "tool": "document_conflict_tool", "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"], "data_scope": "documents", "risk_level": "medium", "requires_approval": False},
-        {"id": "legal-consultation", "tool": "legal_consultation_tool", "allowed_agents": ["legal_compliance_agent", "general_agent"], "data_scope": "legal", "risk_level": "medium", "requires_approval": False},
-        {"id": "legal-contract-review", "tool": "legal_contract_review_tool", "allowed_agents": ["legal_compliance_agent", "general_agent"], "data_scope": "legal", "risk_level": "medium", "requires_approval": False},
-        {"id": "legal-draft", "tool": "legal_draft_tool", "allowed_agents": ["legal_compliance_agent", "general_agent"], "data_scope": "legal", "risk_level": "medium", "requires_approval": False},
-        {"id": "task-query", "tool": "task_query_tool", "allowed_agents": ["workflow_agent", "general_agent"], "data_scope": "tasks", "risk_level": "low", "requires_approval": False},
-        {"id": "task-create", "tool": "task_create_tool", "allowed_agents": ["workflow_agent", "general_agent"], "data_scope": "tasks", "risk_level": "high", "requires_approval": True},
-        {"id": "sql-query", "tool": "sql_query_tool", "allowed_agents": ["general_agent"], "data_scope": "organization", "risk_level": "critical", "requires_approval": True},
+        {
+            "id": "document-search",
+            "tool": "document_search_tool",
+            "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"],
+            "data_scope": "documents",
+            "risk_level": "low",
+            "requires_approval": False,
+        },
+        {
+            "id": "document-summary",
+            "tool": "document_summary_tool",
+            "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"],
+            "data_scope": "documents",
+            "risk_level": "low",
+            "requires_approval": False,
+        },
+        {
+            "id": "document-risk",
+            "tool": "document_risk_tool",
+            "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"],
+            "data_scope": "documents",
+            "risk_level": "medium",
+            "requires_approval": False,
+        },
+        {
+            "id": "document-conflict",
+            "tool": "document_conflict_tool",
+            "allowed_agents": ["knowledge_agent", "legal_compliance_agent", "general_agent"],
+            "data_scope": "documents",
+            "risk_level": "medium",
+            "requires_approval": False,
+        },
+        {
+            "id": "legal-consultation",
+            "tool": "legal_consultation_tool",
+            "allowed_agents": ["legal_compliance_agent", "general_agent"],
+            "data_scope": "legal",
+            "risk_level": "medium",
+            "requires_approval": False,
+        },
+        {
+            "id": "legal-contract-review",
+            "tool": "legal_contract_review_tool",
+            "allowed_agents": ["legal_compliance_agent", "general_agent"],
+            "data_scope": "legal",
+            "risk_level": "medium",
+            "requires_approval": False,
+        },
+        {
+            "id": "legal-draft",
+            "tool": "legal_draft_tool",
+            "allowed_agents": ["legal_compliance_agent", "general_agent"],
+            "data_scope": "legal",
+            "risk_level": "medium",
+            "requires_approval": False,
+        },
+        {
+            "id": "task-query",
+            "tool": "task_query_tool",
+            "allowed_agents": ["workflow_agent", "general_agent"],
+            "data_scope": "tasks",
+            "risk_level": "low",
+            "requires_approval": False,
+        },
+        {
+            "id": "task-create",
+            "tool": "task_create_tool",
+            "allowed_agents": ["workflow_agent", "general_agent"],
+            "data_scope": "tasks",
+            "risk_level": "high",
+            "requires_approval": True,
+        },
+        {
+            "id": "sql-query",
+            "tool": "sql_query_tool",
+            "allowed_agents": ["general_agent"],
+            "data_scope": "organization",
+            "risk_level": "critical",
+            "requires_approval": True,
+        },
     ],
     "bypass_tools": ["finish", "retry"],
 }
@@ -94,7 +164,11 @@ def validate_policy_document(document: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"Duplicate MCP policy rule id: {rule_id}")
         seen_rule_ids.add(rule_id)
         agents = rule.get("allowed_agents")
-        if not isinstance(agents, list) or not agents or not all(isinstance(item, str) and item.strip() for item in agents):
+        if (
+            not isinstance(agents, list)
+            or not agents
+            or not all(isinstance(item, str) and item.strip() for item in agents)
+        ):
             raise ValueError(f"Policy rule {tool} needs allowed_agents")
         risk = str(rule.get("risk_level") or "").lower()
         if risk not in RISK_ORDER:
@@ -148,8 +222,15 @@ class MCPPolicyEngine:
             if canonical in {canonical_agent_type(str(item)) for item in rule.get("allowed_agents", [])}
         }
 
-    def evaluate(self, *, agent_type: str, tool_name: str, db: Session | None = None,
-                 contract: Any | None = None, context: dict[str, Any] | None = None) -> PolicyDecision:
+    def evaluate(
+        self,
+        *,
+        agent_type: str,
+        tool_name: str,
+        db: Session | None = None,
+        contract: Any | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> PolicyDecision:
         document = self.document_for(db)
         version = str(document.get("version") or DEFAULT_POLICY_VERSION)
         canonical = canonical_agent_type(agent_type)
@@ -157,25 +238,75 @@ class MCPPolicyEngine:
             return PolicyDecision(True, policy_version=version, agent_type=canonical, tool_name=tool_name)
         rule = self.rules(db).get(tool_name)
         if rule is None:
-            return PolicyDecision(False, reason="Tool has no policy rule", error_code="MCP_POLICY_DENIED", policy_version=version, agent_type=canonical, tool_name=tool_name)
+            return PolicyDecision(
+                False,
+                reason="Tool has no policy rule",
+                error_code="MCP_POLICY_DENIED",
+                policy_version=version,
+                agent_type=canonical,
+                tool_name=tool_name,
+            )
         rule_id = str(rule.get("id") or tool_name)
         if canonical not in {canonical_agent_type(str(item)) for item in rule.get("allowed_agents", [])}:
-            return PolicyDecision(False, reason="Agent identity is not allowed by MCP policy", error_code="MCP_PERMISSION_DENIED", policy_version=version, rule_id=rule_id, data_scope=rule.get("data_scope"), risk_level=rule.get("risk_level", "low"), agent_type=canonical, tool_name=tool_name)
+            return PolicyDecision(
+                False,
+                reason="Agent identity is not allowed by MCP policy",
+                error_code="MCP_PERMISSION_DENIED",
+                policy_version=version,
+                rule_id=rule_id,
+                data_scope=rule.get("data_scope"),
+                risk_level=rule.get("risk_level", "low"),
+                agent_type=canonical,
+                tool_name=tool_name,
+            )
         context = context or {}
         available_scopes = context.get("data_scopes")
         required_scope = str(rule.get("data_scope") or "")
         if available_scopes is not None and required_scope not in set(available_scopes):
-            return PolicyDecision(False, reason="Data scope is not authorized", error_code="MCP_DATA_SCOPE_DENIED", policy_version=version, rule_id=rule_id, data_scope=required_scope, risk_level=rule.get("risk_level", "low"), agent_type=canonical, tool_name=tool_name)
+            return PolicyDecision(
+                False,
+                reason="Data scope is not authorized",
+                error_code="MCP_DATA_SCOPE_DENIED",
+                policy_version=version,
+                rule_id=rule_id,
+                data_scope=required_scope,
+                risk_level=rule.get("risk_level", "low"),
+                agent_type=canonical,
+                tool_name=tool_name,
+            )
         threshold = context.get("risk_threshold")
         risk = str(rule.get("risk_level") or "low").lower()
         if threshold is not None:
             threshold_value = RISK_ORDER.get(str(threshold).lower(), int(threshold) if str(threshold).isdigit() else 0)
             if RISK_ORDER[risk] > threshold_value:
-                return PolicyDecision(False, reason="Tool risk exceeds policy threshold", error_code="MCP_RISK_THRESHOLD_EXCEEDED", policy_version=version, rule_id=rule_id, data_scope=required_scope, risk_level=risk, agent_type=canonical, tool_name=tool_name)
+                return PolicyDecision(
+                    False,
+                    reason="Tool risk exceeds policy threshold",
+                    error_code="MCP_RISK_THRESHOLD_EXCEEDED",
+                    policy_version=version,
+                    rule_id=rule_id,
+                    data_scope=required_scope,
+                    risk_level=risk,
+                    agent_type=canonical,
+                    tool_name=tool_name,
+                )
         requires_approval = bool(rule.get("requires_approval"))
         if contract is not None:
-            requires_approval = requires_approval or bool(getattr(contract, "requires_approval", False)) or not bool(getattr(contract, "read_only", True))
-        return PolicyDecision(True, requires_approval=requires_approval, policy_version=version, rule_id=rule_id, data_scope=required_scope, risk_level=risk, agent_type=canonical, tool_name=tool_name)
+            requires_approval = (
+                requires_approval
+                or bool(getattr(contract, "requires_approval", False))
+                or not bool(getattr(contract, "read_only", True))
+            )
+        return PolicyDecision(
+            True,
+            requires_approval=requires_approval,
+            policy_version=version,
+            rule_id=rule_id,
+            data_scope=required_scope,
+            risk_level=risk,
+            agent_type=canonical,
+            tool_name=tool_name,
+        )
 
 
 policy_engine = MCPPolicyEngine()

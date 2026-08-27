@@ -7,9 +7,7 @@ class AgentEvalCandidate(Base):
     """A review-gated online failure sample for Agent regression evaluation."""
 
     __tablename__ = "agent_eval_candidates"
-    __table_args__ = (
-        UniqueConstraint("dedupe_key", name="uq_agent_eval_candidates_dedupe_key"),
-    )
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_agent_eval_candidates_dedupe_key"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     agent_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True, index=True)

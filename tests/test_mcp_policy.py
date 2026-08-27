@@ -17,8 +17,10 @@ from app.services.agent.mcp_policy_service import mcp_policy_service
 class MCPPolicyTests(unittest.TestCase):
     def setUp(self):
         engine = create_engine(
-            "sqlite+pysqlite:///:memory:", future=True,
-            connect_args={"check_same_thread": False}, poolclass=StaticPool,
+            "sqlite+pysqlite:///:memory:",
+            future=True,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
         )
         Base.metadata.create_all(engine)
         self.db = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
@@ -48,12 +50,16 @@ class MCPPolicyTests(unittest.TestCase):
 
     def test_dynamic_scope_and_risk_threshold_are_fail_closed(self):
         scope = policy_engine.evaluate(
-            agent_type="workflow_agent", tool_name="task_create_tool",
-            db=self.db, context={"data_scopes": ["documents"]},
+            agent_type="workflow_agent",
+            tool_name="task_create_tool",
+            db=self.db,
+            context={"data_scopes": ["documents"]},
         )
         risk = policy_engine.evaluate(
-            agent_type="workflow_agent", tool_name="task_create_tool",
-            db=self.db, context={"risk_threshold": "medium"},
+            agent_type="workflow_agent",
+            tool_name="task_create_tool",
+            db=self.db,
+            context={"risk_threshold": "medium"},
         )
         self.assertFalse(scope.allowed)
         self.assertEqual(scope.error_code, "MCP_DATA_SCOPE_DENIED")
@@ -79,14 +85,18 @@ class MCPPolicyTests(unittest.TestCase):
         self.db.commit()
         self.db.refresh(run)
         event = AgentAuditEvent(
-            run_id=run.id, trace_id=run.trace_id, event_type="permission_decision",
+            run_id=run.id,
+            trace_id=run.trace_id,
+            event_type="permission_decision",
             tool_name="task_query_tool",
-            decision_json=json.dumps({
-                "allowed": True,
-                "agent_type": "workflow_agent",
-                "tool_name": "task_query_tool",
-                "policy_version": "mcp_policy_old",
-            }),
+            decision_json=json.dumps(
+                {
+                    "allowed": True,
+                    "agent_type": "workflow_agent",
+                    "tool_name": "task_query_tool",
+                    "policy_version": "mcp_policy_old",
+                }
+            ),
         )
         self.db.add(event)
         self.db.commit()

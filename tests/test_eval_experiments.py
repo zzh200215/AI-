@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 from eval.create_eval_bundle import create_bundle
 from eval.index_eval_corpus import build_chunks, load_manifest
-from eval.run_experiments import build_baseline_snapshot, compare_with_baseline, run_experiments, write_experiment_outputs
+from eval.run_experiments import (
+    build_baseline_snapshot,
+    compare_with_baseline,
+    run_experiments,
+    write_experiment_outputs,
+)
 
 
 class EvalCorpusTests(unittest.TestCase):
@@ -82,7 +87,10 @@ class EvalExperimentRunnerTests(unittest.TestCase):
             },
         ]
 
-        with patch("eval.run_experiments.index_corpus") as mock_index, patch("eval.run_experiments.run_eval") as mock_eval:
+        with (
+            patch("eval.run_experiments.index_corpus") as mock_index,
+            patch("eval.run_experiments.run_eval") as mock_eval,
+        ):
             mock_index.return_value = [{"document_id": 1, "chunk_count": 4}]
             mock_eval.return_value = {
                 "config": {"top_k": 5, "confidence_threshold": 0.35},
@@ -131,7 +139,10 @@ class EvalExperimentRunnerTests(unittest.TestCase):
             },
         ]
 
-        with patch("eval.run_experiments.index_corpus") as mock_index, patch("eval.run_experiments.run_eval") as mock_eval:
+        with (
+            patch("eval.run_experiments.index_corpus") as mock_index,
+            patch("eval.run_experiments.run_eval") as mock_eval,
+        ):
             mock_index.return_value = [{"document_id": 1, "chunk_count": 4}]
             mock_eval.return_value = {
                 "config": {"top_k": 5, "confidence_threshold": 0.35},
@@ -164,7 +175,10 @@ class EvalExperimentRunnerTests(unittest.TestCase):
             },
         ]
 
-        with patch("eval.run_experiments.index_corpus") as mock_index, patch("eval.run_experiments.run_eval") as mock_eval:
+        with (
+            patch("eval.run_experiments.index_corpus") as mock_index,
+            patch("eval.run_experiments.run_eval") as mock_eval,
+        ):
             mock_eval.return_value = {
                 "config": {"top_k": 5, "confidence_threshold": 0.35},
                 "summary": {

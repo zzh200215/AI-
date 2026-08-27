@@ -134,9 +134,7 @@ def validate_ocr_confidence(
         low_ratio = 0.0 if text.strip() else 1.0
     confidence = _clamp(average * 0.75 + readable * 0.25)
     review_required = (
-        not text.strip()
-        or confidence < _clamp(settings.OCR_REVIEW_CONFIDENCE, 0.78)
-        or low_ratio > max_low_ratio
+        not text.strip() or confidence < _clamp(settings.OCR_REVIEW_CONFIDENCE, 0.78) or low_ratio > max_low_ratio
     )
     status = "low" if confidence < 0.5 else "review" if review_required else "high"
     return {
@@ -353,13 +351,17 @@ def locate_evidence_pages(analysis: dict, query: str, *, limit: int = 10) -> lis
                 start = haystack.find(needle)
             if start < 0:
                 start = 0
-            excerpt = page_text[max(0, start - 80): start + len(needle) + 180]
+            excerpt = page_text[max(0, start - 80) : start + len(needle) + 180]
         blocks = page.get("layout", {}).get("blocks") or []
         block = next((item for item in blocks if any(term in item.get("text", "") for term in terms)), None)
         hits.append(
             {
                 "page_number": page.get("page_number"),
-                "excerpt": (excerpt if page_text else str((matched_region or {}).get("evidence") or (matched_region or {}).get("text") or ""))[:400],
+                "excerpt": (
+                    excerpt
+                    if page_text
+                    else str((matched_region or {}).get("evidence") or (matched_region or {}).get("text") or "")
+                )[:400],
                 "bbox": (block or matched_region or {}).get("bbox"),
                 "ocr_confidence": page.get("ocr", {}).get("confidence"),
                 "match_score": round(score, 4),
@@ -505,7 +507,10 @@ class MultimodalDocumentAnalyzer:
             if span is not None:
                 try:
                     span.set_attribute("document.page_count", len(pages))
-                    span.set_attribute("document.ocr_review_required", any((page.get("ocr") or {}).get("review_required") for page in pages))
+                    span.set_attribute(
+                        "document.ocr_review_required",
+                        any((page.get("ocr") or {}).get("review_required") for page in pages),
+                    )
                 except Exception:
                     pass
         warnings = []
@@ -646,7 +651,10 @@ class MultimodalDocumentAnalyzer:
                     "layout": {"reading_order": "top_to_bottom_left_to_right", "blocks": _layout_blocks(words)},
                     "ocr": quality,
                     "regions": identify_signature_seal_regions(
-                        words, page_width=getattr(image, "width", None), page_height=getattr(image, "height", None), ocr_confidence=quality["confidence"]
+                        words,
+                        page_width=getattr(image, "width", None),
+                        page_height=getattr(image, "height", None),
+                        ocr_confidence=quality["confidence"],
                     ),
                     "tables": [],
                     "clauses": [],
@@ -696,9 +704,7 @@ class MultimodalDocumentAnalyzer:
             .first()
         )
         if row is None:
-            row = DocumentMultimodalAnalysis(
-                document_id=result["document_id"], version_number=result["version_number"]
-            )
+            row = DocumentMultimodalAnalysis(document_id=result["document_id"], version_number=result["version_number"])
             db.add(row)
         row.status = "review_required" if result["review_required"] else "ready"
         row.parser_version = result["parser_version"]

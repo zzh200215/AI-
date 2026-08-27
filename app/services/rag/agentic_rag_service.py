@@ -7,7 +7,6 @@ never bypasses document permissions, citation grounding, or refusal checks in
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any
 
@@ -37,9 +36,13 @@ class AgenticRAGService:
             return query, "rule"
         prompt = (
             "你是企业知识库检索规划器，只能优化检索表达，不回答用户问题，不添加事实。\n"
-            "输出 JSON：{\"search_query\": \"不超过300字的检索问题\"}。\n"
+            '输出 JSON：{"search_query": "不超过300字的检索问题"}。\n'
             f"原始问题：{query}\n"
-            + ("上一轮证据不足，请将问题改写为更利于定位制度、条款、日期、金额、责任人或例外条件的检索表达。" if refinement else "请保留原问题的业务实体、时间、数值和约束。")
+            + (
+                "上一轮证据不足，请将问题改写为更利于定位制度、条款、日期、金额、责任人或例外条件的检索表达。"
+                if refinement
+                else "请保留原问题的业务实体、时间、数值和约束。"
+            )
         )
         try:
             with observe_span("rag.plan", {"rag.planner": "llm"}):
@@ -88,7 +91,8 @@ class AgenticRAGService:
         # 会话记忆：追问消歧——用上一轮用户问题补全当前检索表达式
         history = state.get("conversation_history") or []
         last_user_question = next(
-            (m.get("content") for m in reversed(history) if m.get("role") == "user"), None,
+            (m.get("content") for m in reversed(history) if m.get("role") == "user"),
+            None,
         )
         if last_user_question and last_user_question != state["question"]:
             search_query = f"{last_user_question} {search_query}"

@@ -68,7 +68,9 @@ class AgentAuditService:
             organization_id=organization_id,
             tool_name=tool_name,
             tool_version=tool_version,
-            decision_json=json.dumps(trim_sensitive_args(decision), ensure_ascii=False, default=str) if decision else None,
+            decision_json=json.dumps(trim_sensitive_args(decision), ensure_ascii=False, default=str)
+            if decision
+            else None,
             summary_json=json.dumps(trim_sensitive_args(summary), ensure_ascii=False, default=str) if summary else None,
             error_category=error_category,
             status=status,

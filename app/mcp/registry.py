@@ -104,11 +104,7 @@ class MCPRegistry:
     def list_tools_for(self, agent_type: str, db: Session | None = None) -> list[dict[str, Any]]:
         """Return only the tools that ``agent_type`` is allowed to call."""
         allowed = sorted(policy_engine.allowed_tools_for(agent_type, db))
-        return [
-            tool_to_mcp_spec(_TOOL_INSTANCES[name])
-            for name in allowed
-            if name in _TOOL_INSTANCES
-        ]
+        return [tool_to_mcp_spec(_TOOL_INSTANCES[name]) for name in allowed if name in _TOOL_INSTANCES]
 
     # ── Observability hooks ─────────────────────────────────────────────
 
@@ -195,12 +191,7 @@ class MCPRegistry:
                 data={"tool_name": tool_name},
             )
 
-        if (
-            not skip_approval
-            and db is not None
-            and user_id is not None
-            and policy.requires_approval
-        ):
+        if not skip_approval and db is not None and user_id is not None and policy.requires_approval:
             approval = agent_approval_service.create_request(
                 db=db,
                 user_id=user_id,

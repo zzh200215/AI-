@@ -6,7 +6,7 @@ import math
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -14,11 +14,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 import app.models  # noqa: F401
-from eval.bundle_utils import DEFAULT_DATASET_PATH, load_bundle_meta, resolve_eval_paths
-from eval.common import ensure_eval_llm_ready
-from app.services.rag.agentic_rag_service import agentic_rag_service
 from app.services.llm.prompt_service import prompt_service
+from app.services.rag.agentic_rag_service import agentic_rag_service
 from app.services.rag.rag_service import rag_service
+from eval.bundle_utils import load_bundle_meta, resolve_eval_paths
+from eval.common import ensure_eval_llm_ready
 
 
 def load_dataset(path: Path) -> list[dict]:
@@ -88,21 +88,25 @@ def _normalize_expected_evidence(item: dict) -> list[dict]:
             cleaned = [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
             if not cleaned:
                 continue
-            normalized.append({
-                "id": str(evidence.get("id") or f"evidence_{index}"),
-                "keywords": cleaned,
-                "match": "all" if str(evidence.get("match") or "any").lower() == "all" else "any",
-            })
+            normalized.append(
+                {
+                    "id": str(evidence.get("id") or f"evidence_{index}"),
+                    "keywords": cleaned,
+                    "match": "all" if str(evidence.get("match") or "any").lower() == "all" else "any",
+                }
+            )
         return normalized
 
     keywords = _normalize_expected_keywords(item)
     if not keywords:
         return []
-    return [{
-        "id": "default",
-        "keywords": keywords,
-        "match": "all" if str(item.get("expected_chunk_match") or "any").lower() == "all" else "any",
-    }]
+    return [
+        {
+            "id": "default",
+            "keywords": keywords,
+            "match": "all" if str(item.get("expected_chunk_match") or "any").lower() == "all" else "any",
+        }
+    ]
 
 
 def _text_matches_evidence(text: str, evidence: dict) -> bool:
@@ -206,13 +210,16 @@ def _build_category_summary(cases: list[dict]) -> dict[str, dict]:
     categories: dict[str, dict] = {}
     for case in cases:
         category = str(case.get("category") or "uncategorized")
-        summary = categories.setdefault(category, {
-            "total_cases": 0,
-            "answerable_cases": 0,
-            "refusal_cases": 0,
-            "badcase_count": 0,
-            "outcomes": {},
-        })
+        summary = categories.setdefault(
+            category,
+            {
+                "total_cases": 0,
+                "answerable_cases": 0,
+                "refusal_cases": 0,
+                "badcase_count": 0,
+                "outcomes": {},
+            },
+        )
         summary["total_cases"] += 1
         summary["refusal_cases" if case.get("should_refuse") else "answerable_cases"] += 1
         outcome = str(case.get("case_outcome") or "unknown")
@@ -288,7 +295,9 @@ def run_eval(
         citation_evidence = _evidence_metrics(expected_evidence, result.get("citations") or [], text_key="source_text")
         hit = retrieval_evidence["hit"]
         citation_ok = citation_evidence["hit"]
-        expected_answer_keywords = [str(item).strip() for item in item.get("expected_answer_keywords") or [] if str(item).strip()]
+        expected_answer_keywords = [
+            str(item).strip() for item in item.get("expected_answer_keywords") or [] if str(item).strip()
+        ]
         answer_ok = answer_hit(expected_answer_keywords, result.get("answer", ""))
         refusal_correct = should_refuse and not result.get("can_answer", False)
         case_outcome = _classify_case(item, result, hit=hit, citation_ok=citation_ok)
@@ -363,8 +372,8 @@ def run_eval(
     category_summary = _build_category_summary(cases)
     retrieval_evidence_labeled_count = totals["retrieval_evidence_labeled_count"]
     return {
-        "evaluation_id": f"rag_eval_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{fingerprint[:8]}",
-        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "evaluation_id": f"rag_eval_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{fingerprint[:8]}",
+        "evaluated_at": datetime.now(UTC).isoformat(),
         "config": {
             "top_k": runtime_config["top_k"],
             "confidence_threshold": runtime_config["confidence_threshold"],
@@ -386,24 +395,42 @@ def run_eval(
             "refusal_cases": totals["refusal_count"],
             "hit_at_k": round(totals["hit_count"] / answerable_count, 4) if totals["answerable_count"] else None,
             "retrieval_evidence_labeled_cases": retrieval_evidence_labeled_count,
-            "mrr": round(totals["mrr_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
-            f"ndcg_at_{runtime_config['top_k']}": round(totals["ndcg_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
-            "retrieval_evidence_coverage": round(totals["retrieval_evidence_coverage_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
-            "citation_evidence_coverage": round(totals["citation_evidence_coverage_total"] / retrieval_evidence_labeled_count, 4) if retrieval_evidence_labeled_count else None,
-            "citation_accuracy": round(totals["citation_hit_count"] / answerable_count, 4) if totals["answerable_count"] else None,
-            "refusal_accuracy": round(totals["refusal_correct_count"] / refusal_count, 4) if totals["refusal_count"] else None,
+            "mrr": round(totals["mrr_total"] / retrieval_evidence_labeled_count, 4)
+            if retrieval_evidence_labeled_count
+            else None,
+            f"ndcg_at_{runtime_config['top_k']}": round(totals["ndcg_total"] / retrieval_evidence_labeled_count, 4)
+            if retrieval_evidence_labeled_count
+            else None,
+            "retrieval_evidence_coverage": round(
+                totals["retrieval_evidence_coverage_total"] / retrieval_evidence_labeled_count, 4
+            )
+            if retrieval_evidence_labeled_count
+            else None,
+            "citation_evidence_coverage": round(
+                totals["citation_evidence_coverage_total"] / retrieval_evidence_labeled_count, 4
+            )
+            if retrieval_evidence_labeled_count
+            else None,
+            "citation_accuracy": round(totals["citation_hit_count"] / answerable_count, 4)
+            if totals["answerable_count"]
+            else None,
+            "refusal_accuracy": round(totals["refusal_correct_count"] / refusal_count, 4)
+            if totals["refusal_count"]
+            else None,
             "hit_count": totals["hit_count"],
             "citation_hit_count": totals["citation_hit_count"],
             "refusal_correct_count": totals["refusal_correct_count"],
             "answer_labeled_cases": totals["answer_labeled_count"],
             "answer_correct_count": totals["answer_correct_count"],
-            "answer_accuracy": round(totals["answer_correct_count"] / totals["answer_labeled_count"], 4) if totals["answer_labeled_count"] else None,
+            "answer_accuracy": round(totals["answer_correct_count"] / totals["answer_labeled_count"], 4)
+            if totals["answer_labeled_count"]
+            else None,
             "average_latency_ms": round(totals["latency_ms_total"] / totals["count"], 2) if totals["count"] else None,
             "latency_p50_ms": latency_p50,
             "latency_p95_ms": latency_p95,
-            "average_retrieval_rounds": round(
-                totals["agentic_retrieval_rounds_total"] / totals["count"], 2
-            ) if totals["count"] else None,
+            "average_retrieval_rounds": round(totals["agentic_retrieval_rounds_total"] / totals["count"], 2)
+            if totals["count"]
+            else None,
             "badcase_count": len(badcases),
         },
         "cases": cases,
@@ -418,7 +445,7 @@ async def run_eval_with_llm_judge(**kwargs) -> dict:
 
     result = run_eval(**kwargs)
     judgements = await judge_cases(result["cases"])
-    for case, judgement in zip(result["cases"], judgements):
+    for case, judgement in zip(result["cases"], judgements, strict=False):
         case["llm_judge"] = judgement
     result["summary"]["llm_judge"] = summarize_judgements(judgements)
     result["config"]["llm_judge_enabled"] = True
@@ -432,17 +459,25 @@ def write_eval_output(path: Path, payload: dict) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RAG evaluation on qa_dataset.json")
-    parser.add_argument("--bundle-dir", default=None, help="Directory of an eval bundle containing manifest/dataset/matrix")
+    parser.add_argument(
+        "--bundle-dir", default=None, help="Directory of an eval bundle containing manifest/dataset/matrix"
+    )
     parser.add_argument("--dataset", default=None, help="Path to dataset json; overrides bundle dataset when provided")
     parser.add_argument("--user-id", type=int, default=None, help="Optional user id filter")
     parser.add_argument("--top-k", type=int, default=5, help="RAG retrieval top_k")
     parser.add_argument("--confidence-threshold", type=float, default=0.35, help="RAG refusal threshold")
-    parser.add_argument("--context-neighbor-window", type=int, default=None, help="Neighbor chunks added around retrieval hits")
-    parser.add_argument("--context-max-chunks", type=int, default=None, help="Maximum chunks passed into the answer prompt")
+    parser.add_argument(
+        "--context-neighbor-window", type=int, default=None, help="Neighbor chunks added around retrieval hits"
+    )
+    parser.add_argument(
+        "--context-max-chunks", type=int, default=None, help="Maximum chunks passed into the answer prompt"
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print output json")
     parser.add_argument("--llm-judge", action="store_true", help="Enable optional LLM-as-Judge auxiliary scores")
     parser.add_argument("--output", default=None, help="Optional path for the full evaluation JSON report")
-    parser.add_argument("--validate-only", action="store_true", help="Validate dataset annotations without calling the RAG service")
+    parser.add_argument(
+        "--validate-only", action="store_true", help="Validate dataset annotations without calling the RAG service"
+    )
     return parser.parse_args()
 
 

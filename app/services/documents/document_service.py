@@ -34,8 +34,9 @@ IMAGE_FILE_TYPES = {"png", ".png", "jpg", ".jpg", "jpeg", ".jpeg", "bmp", ".bmp"
 VISION_SUPPORTED_FILE_TYPES = IMAGE_FILE_TYPES | {"pdf", ".pdf"}
 
 
-def _try_index_document(document_id: int, chunks: list[dict], *, user_id: int | None = None,
-                        knowledge_base_id: int | None = None) -> Exception | None:
+def _try_index_document(
+    document_id: int, chunks: list[dict], *, user_id: int | None = None, knowledge_base_id: int | None = None
+) -> Exception | None:
     try:
         rag_service.index_document(
             document_id,

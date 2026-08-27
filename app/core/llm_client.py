@@ -33,8 +33,26 @@ DEFAULT_REQUEST_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 1.5
 
 _COMPLEX_REQUEST_MARKERS = (
-    "合同", "法律", "仲裁", "诉讼", "风险", "对比", "比较", "差异", "条款", "流程",
-    "分析", "总结", "方案", "证据", "责任", "条件", "金额", "日期", "分别", "以及",
+    "合同",
+    "法律",
+    "仲裁",
+    "诉讼",
+    "风险",
+    "对比",
+    "比较",
+    "差异",
+    "条款",
+    "流程",
+    "分析",
+    "总结",
+    "方案",
+    "证据",
+    "责任",
+    "条件",
+    "金额",
+    "日期",
+    "分别",
+    "以及",
 )
 _PRIMARY_ACTION_PREFIXES = ("legal_", "agent_", "agentic_", "rag_", "text_to_sql")
 _PRIMARY_ACTIONS = {"generate_with_images", "embedding"}
@@ -56,6 +74,7 @@ class _RoutePlan:
     targets: tuple[_ModelTarget, ...]
     decision: ModelReleaseDecision | None = None
     shadow_target: _ModelTarget | None = None
+
 
 ACTION_PROMPT_TEMPLATE_MAP = {
     "document_summary": "document_summary",
@@ -178,15 +197,26 @@ class ModelGateway:
     def _embedding_url(self) -> str:
         return provider_adapter(self.provider).embedding_url(self.base_url)
 
-    def _build_chat_payload(self, messages: list[dict], stream: bool, temperature: float, target: _ModelTarget | None = None, max_tokens: int | None = None) -> dict:
+    def _build_chat_payload(
+        self,
+        messages: list[dict],
+        stream: bool,
+        temperature: float,
+        target: _ModelTarget | None = None,
+        max_tokens: int | None = None,
+    ) -> dict:
         target = target or self.primary_target
         return provider_adapter(target.provider).chat_payload(
             target.model, self._normalize_messages(messages), stream, temperature, max_tokens=max_tokens
         )
 
-    def _build_generate_payload(self, prompt: str, temperature: float, target: _ModelTarget | None = None, max_tokens: int | None = None) -> dict:
+    def _build_generate_payload(
+        self, prompt: str, temperature: float, target: _ModelTarget | None = None, max_tokens: int | None = None
+    ) -> dict:
         target = target or self.primary_target
-        return provider_adapter(target.provider).generate_payload(target.model, prompt, temperature, max_tokens=max_tokens)
+        return provider_adapter(target.provider).generate_payload(
+            target.model, prompt, temperature, max_tokens=max_tokens
+        )
 
     def _build_multimodal_generate_payload(
         self,
@@ -252,7 +282,11 @@ class ModelGateway:
     def _policy_retries(self, policy: TaskPolicy, target: _ModelTarget) -> int:
         if target.role == "primary":
             return policy.max_retries if policy.max_retries is not None else settings.LLM_PRIMARY_REQUEST_RETRIES
-        return policy.fallback_max_retries if policy.fallback_max_retries is not None else settings.LLM_FALLBACK_REQUEST_RETRIES
+        return (
+            policy.fallback_max_retries
+            if policy.fallback_max_retries is not None
+            else settings.LLM_FALLBACK_REQUEST_RETRIES
+        )
 
     def _build_request(
         self,
@@ -303,7 +337,9 @@ class ModelGateway:
         """把网关结果转成 ModelRequest/审计可用的结构化字段（只含规则 code，无原始文本）。"""
         return {
             "data_level": result.data_level.value if result.data_level is not None else None,
-            "pii_hit_codes": json.dumps(list(result.pii_hit_codes), ensure_ascii=False) if result.pii_hit_codes else None,
+            "pii_hit_codes": json.dumps(list(result.pii_hit_codes), ensure_ascii=False)
+            if result.pii_hit_codes
+            else None,
             "pii_hit_count": result.pii_hit_count,
             "redacted_count": result.redacted_count,
         }
@@ -346,7 +382,9 @@ class ModelGateway:
                     response_excerpt=None,
                     provider=settings.LLM_PROVIDER,
                     data_level=result.data_level.value,
-                    pii_hit_codes=json.dumps(list(result.pii_hit_codes), ensure_ascii=False) if result.pii_hit_codes else None,
+                    pii_hit_codes=json.dumps(list(result.pii_hit_codes), ensure_ascii=False)
+                    if result.pii_hit_codes
+                    else None,
                     pii_hit_count=result.pii_hit_count,
                     redacted_count=0,
                     blocked_reason=result.blocked_reason,
@@ -416,10 +454,13 @@ class ModelGateway:
         # P1：LLM 供应商请求子 span（仅 model/provider 元数据，绝不记录 prompt/正文）。
         from app.core.telemetry import observe_span
 
-        with observe_span("llm.http_request", attributes={
-            "model": getattr(self, "model", None) or "unknown",
-            "provider": getattr(self, "provider", None) or "unknown",
-        }):
+        with observe_span(
+            "llm.http_request",
+            attributes={
+                "model": getattr(self, "model", None) or "unknown",
+                "provider": getattr(self, "provider", None) or "unknown",
+            },
+        ):
             last_error: Exception | None = None
             for attempt in range(1, retries + 1):
                 try:
@@ -610,7 +651,12 @@ class ModelGateway:
 
     @staticmethod
     def _same_target(left: _ModelTarget, right: _ModelTarget) -> bool:
-        return (left.model, left.provider, left.base_url, left.api_key) == (right.model, right.provider, right.base_url, right.api_key)
+        return (left.model, left.provider, left.base_url, left.api_key) == (
+            right.model,
+            right.provider,
+            right.base_url,
+            right.api_key,
+        )
 
     def _circuit_key(self, target: _ModelTarget, task: str) -> str:
         return self.circuit_breaker.key(provider=target.provider, base_url=target.base_url, task=task)
@@ -656,7 +702,9 @@ class ModelGateway:
             api_key=api_key,
         )
 
-    def _build_route_plan(self, *, source_text: str, request: ModelRequest, policy: TaskPolicy | None = None) -> _RoutePlan:
+    def _build_route_plan(
+        self, *, source_text: str, request: ModelRequest, policy: TaskPolicy | None = None
+    ) -> _RoutePlan:
         policy = policy or get_task_policy(request.action)
         baseline_targets = self._candidate_targets(source_text, request.action, policy=policy)
         baseline_model = baseline_targets[0].model if baseline_targets else self.primary_target.model
@@ -725,7 +773,9 @@ class ModelGateway:
         if request.request_type in ("chat", "chat_stream"):
             normalized = json.dumps(request.messages or [], ensure_ascii=False, sort_keys=True)
         else:
-            normalized = json.dumps({"prompt": request.prompt or "", "schema": schema}, ensure_ascii=False, sort_keys=True)
+            normalized = json.dumps(
+                {"prompt": request.prompt or "", "schema": schema}, ensure_ascii=False, sort_keys=True
+            )
         perm_digest = hashlib.sha256(str(permission_fingerprint or "public").encode("utf-8")).hexdigest()
         payload = json.dumps(
             {
@@ -775,9 +825,13 @@ class ModelGateway:
         request_excerpt = json.dumps(request.messages, ensure_ascii=False) if is_chat else str(request.prompt or "")
         url = self._chat_url(target) if is_chat else self._generate_url(target)
         payload = (
-            self._build_chat_payload(request.messages or [], stream=False, temperature=temperature, target=target, max_tokens=max_tokens)
+            self._build_chat_payload(
+                request.messages or [], stream=False, temperature=temperature, target=target, max_tokens=max_tokens
+            )
             if is_chat
-            else self._build_generate_payload(request.prompt or "", temperature=temperature, target=target, max_tokens=max_tokens)
+            else self._build_generate_payload(
+                request.prompt or "", temperature=temperature, target=target, max_tokens=max_tokens
+            )
         )
         start = time.time()
         retries = self._policy_retries(policy, target)
@@ -785,22 +839,38 @@ class ModelGateway:
         try:
             client = self._get_client(target, timeout=self._policy_timeout(policy))
             data = await self._post_json_with_retry(
-                client, url=url, payload=payload, headers=self._build_headers(target), retries=retries,
+                client,
+                url=url,
+                payload=payload,
+                headers=self._build_headers(target),
+                retries=retries,
             )
         except Exception as exc:
             self.circuit_breaker.record_failure(
-                circuit_key, counts=counts_toward_breaker(classify_error(exc).kind),
+                circuit_key,
+                counts=counts_toward_breaker(classify_error(exc).kind),
             )
             self._record_target_usage(
-                {}, target, request.action, int((time.time() - start) * 1000), request.user_id,
-                request_excerpt=request_excerpt, error_message=str(exc), status="error",
-                prompt_template=request.prompt_template, prompt_version=request.prompt_version,
-                request_id=request.request_id, routing_role=target.role, routing_stage=routing_stage,
+                {},
+                target,
+                request.action,
+                int((time.time() - start) * 1000),
+                request.user_id,
+                request_excerpt=request_excerpt,
+                error_message=str(exc),
+                status="error",
+                prompt_template=request.prompt_template,
+                prompt_version=request.prompt_version,
+                request_id=request.request_id,
+                routing_role=target.role,
+                routing_stage=routing_stage,
                 attempt_number=attempt_number,
                 estimated_input_tokens=request.estimated_input_tokens,
                 estimated_output_tokens=request.estimated_output_tokens,
-                data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-                pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                data_level=request.data_level,
+                pii_hit_codes=request.pii_hit_codes,
+                pii_hit_count=request.pii_hit_count,
+                redacted_count=request.redacted_count,
                 billable=billable,
                 **self._release_log_fields(decision, traffic_type=traffic_type),
             )
@@ -808,18 +878,29 @@ class ModelGateway:
         self.circuit_breaker.record_success(circuit_key)
         response_excerpt = (
             self._extract_chat_content(data, provider=target.provider)
-            if is_chat else self._extract_generate_content(data, provider=target.provider)
+            if is_chat
+            else self._extract_generate_content(data, provider=target.provider)
         )
         self._record_target_usage(
-            data, target, request.action, int((time.time() - start) * 1000), request.user_id,
-            request_excerpt=request_excerpt, response_excerpt=response_excerpt,
-            prompt_template=request.prompt_template, prompt_version=request.prompt_version,
-            request_id=request.request_id, routing_role=target.role, routing_stage=routing_stage,
+            data,
+            target,
+            request.action,
+            int((time.time() - start) * 1000),
+            request.user_id,
+            request_excerpt=request_excerpt,
+            response_excerpt=response_excerpt,
+            prompt_template=request.prompt_template,
+            prompt_version=request.prompt_version,
+            request_id=request.request_id,
+            routing_role=target.role,
+            routing_stage=routing_stage,
             attempt_number=attempt_number,
             estimated_input_tokens=request.estimated_input_tokens,
             estimated_output_tokens=request.estimated_output_tokens,
-            data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-            pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+            data_level=request.data_level,
+            pii_hit_codes=request.pii_hit_codes,
+            pii_hit_count=request.pii_hit_count,
+            redacted_count=request.redacted_count,
             billable=billable,
             **self._release_log_fields(decision, traffic_type=traffic_type),
         )
@@ -877,7 +958,9 @@ class ModelGateway:
         targets = plan.targets
         if not targets:
             raise self._circuit_open_error(
-                task=policy.task, request_id=request.request_id, trace_id=request.trace_id,
+                task=policy.task,
+                request_id=request.request_id,
+                trace_id=request.trace_id,
             )
         last_error: Exception | None = None
         for index, target in enumerate(targets):
@@ -928,9 +1011,14 @@ class ModelGateway:
         )
         safe_messages = self._rebuild_messages(messages, safe_pieces) if messages else messages
         request = self._build_request(
-            request_type="chat", messages=safe_messages, temperature=temperature,
-            action=action, user_id=user_id, prompt_template=prompt_template,
-            prompt_version=prompt_version, trace_id=trace_id,
+            request_type="chat",
+            messages=safe_messages,
+            temperature=temperature,
+            action=action,
+            user_id=user_id,
+            prompt_template=prompt_template,
+            prompt_version=prompt_version,
+            trace_id=trace_id,
             estimated_input_tokens=enforcement.get("estimated_input_tokens"),
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
@@ -941,9 +1029,11 @@ class ModelGateway:
         if cacheable and not stream and settings.LLM_RESPONSE_CACHE_ENABLED:
             policy = get_task_policy(action)
             cache_key = self._cache_key(
-                task=policy.task, request=request,
+                task=policy.task,
+                request=request,
                 model=self._cache_model_for_plan(
-                    route_plan, fallback_model=self._cache_model(source_text, action),
+                    route_plan,
+                    fallback_model=self._cache_model(source_text, action),
                 ),
                 permission_fingerprint=permission_fingerprint,
             )
@@ -951,7 +1041,9 @@ class ModelGateway:
             if cached is not None:
                 return cached
         raw = await self._request_text_with_routing(
-            source_text=source_text, request=request, route_plan=route_plan,
+            source_text=source_text,
+            request=request,
+            route_plan=route_plan,
         )
         if cache_key is not None:
             self.response_cache.put(cache_key, raw)
@@ -980,9 +1072,14 @@ class ModelGateway:
         )
         safe_prompt = safe_pieces[0] if safe_pieces else (prompt or "")
         request = self._build_request(
-            request_type="generate", prompt=safe_prompt, temperature=temperature,
-            action=action, user_id=user_id, prompt_template=prompt_template,
-            prompt_version=prompt_version, trace_id=trace_id,
+            request_type="generate",
+            prompt=safe_prompt,
+            temperature=temperature,
+            action=action,
+            user_id=user_id,
+            prompt_template=prompt_template,
+            prompt_version=prompt_version,
+            trace_id=trace_id,
             estimated_input_tokens=enforcement.get("estimated_input_tokens"),
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
@@ -992,9 +1089,11 @@ class ModelGateway:
         if cacheable and settings.LLM_RESPONSE_CACHE_ENABLED:
             policy = get_task_policy(action)
             cache_key = self._cache_key(
-                task=policy.task, request=request,
+                task=policy.task,
+                request=request,
                 model=self._cache_model_for_plan(
-                    route_plan, fallback_model=self._cache_model(safe_prompt, action),
+                    route_plan,
+                    fallback_model=self._cache_model(safe_prompt, action),
                 ),
                 permission_fingerprint=permission_fingerprint,
             )
@@ -1002,7 +1101,9 @@ class ModelGateway:
             if cached is not None:
                 return cached
         raw = await self._request_text_with_routing(
-            source_text=safe_prompt, request=request, route_plan=route_plan,
+            source_text=safe_prompt,
+            request=request,
+            route_plan=route_plan,
         )
         if cache_key is not None:
             self.response_cache.put(cache_key, raw)
@@ -1047,9 +1148,14 @@ class ModelGateway:
         )
         safe_prompt = safe_pieces[0] if safe_pieces else (prompt or "")
         request = self._build_request(
-            request_type="generate", prompt=safe_prompt, temperature=temperature,
-            action=action, user_id=user_id, prompt_template=prompt_template,
-            prompt_version=prompt_version, trace_id=trace_id,
+            request_type="generate",
+            prompt=safe_prompt,
+            temperature=temperature,
+            action=action,
+            user_id=user_id,
+            prompt_template=prompt_template,
+            prompt_version=prompt_version,
+            trace_id=trace_id,
             estimated_input_tokens=enforcement.get("estimated_input_tokens"),
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
@@ -1058,9 +1164,11 @@ class ModelGateway:
         cache_key = None
         if cacheable and settings.LLM_RESPONSE_CACHE_ENABLED:
             cache_key = self._cache_key(
-                task=policy.task, request=request,
+                task=policy.task,
+                request=request,
                 model=self._cache_model_for_plan(
-                    route_plan, fallback_model=self._cache_model(safe_prompt, action),
+                    route_plan,
+                    fallback_model=self._cache_model(safe_prompt, action),
                 ),
                 permission_fingerprint=permission_fingerprint,
                 schema=spec.json_schema,
@@ -1071,7 +1179,9 @@ class ModelGateway:
                 if cached_data is not None:
                     return cached_data
         raw = await self._request_text_with_routing(
-            source_text=safe_prompt, request=request, route_plan=route_plan,
+            source_text=safe_prompt,
+            request=request,
+            route_plan=route_plan,
         )
         data, failure_kind = parse_structured_output(raw, spec)
         if data is not None:
@@ -1085,7 +1195,9 @@ class ModelGateway:
                 repair_prompt = build_repair_prompt(spec.json_schema, candidate_raw)
                 # 修复请求同样受权限/预算/限流约束（同一 action/user），不绕过治理；
                 # P0 出站保护：修复载荷同样过统一网关（含脱敏，防止模型输出回显 PII）。
-                repair_enforcement = llm_governance_service.enforce_generate_request(prompt=repair_prompt, user_id=user_id, action=action)
+                repair_enforcement = llm_governance_service.enforce_generate_request(
+                    prompt=repair_prompt, user_id=user_id, action=action
+                )
                 safe_repair, repair_gate = self._apply_outbound_gate(
                     pieces=[repair_prompt],
                     action=action,
@@ -1095,14 +1207,21 @@ class ModelGateway:
                 )
                 safe_repair_prompt = safe_repair[0] if safe_repair else repair_prompt
                 repair_request = self._build_request(
-                    request_type="generate", prompt=safe_repair_prompt, temperature=0.0,
-                    action=action, user_id=user_id, prompt_template=None, prompt_version=None,
+                    request_type="generate",
+                    prompt=safe_repair_prompt,
+                    temperature=0.0,
+                    action=action,
+                    user_id=user_id,
+                    prompt_template=None,
+                    prompt_version=None,
                     trace_id=request.trace_id,
                     estimated_input_tokens=repair_enforcement.get("estimated_input_tokens"),
                     estimated_output_tokens=repair_enforcement.get("estimated_output_tokens"),
                     **self._gate_audit_fields(repair_gate),
                 )
-                candidate_raw = await self._request_text_with_routing(source_text=safe_repair_prompt, request=repair_request)
+                candidate_raw = await self._request_text_with_routing(
+                    source_text=safe_repair_prompt, request=repair_request
+                )
                 repaired_data, sub_kind = parse_structured_output(candidate_raw, spec)
                 if repaired_data is not None:
                     if cache_key is not None:
@@ -1146,9 +1265,15 @@ class ModelGateway:
         )
         safe_prompt = safe_pieces[0] if safe_pieces else (prompt or "")
         request = self._build_request(
-            request_type="vision", prompt=safe_prompt, image_urls=image_urls, temperature=temperature,
-            action=action, user_id=user_id, prompt_template=prompt_template,
-            prompt_version=prompt_version, trace_id=trace_id,
+            request_type="vision",
+            prompt=safe_prompt,
+            image_urls=image_urls,
+            temperature=temperature,
+            action=action,
+            user_id=user_id,
+            prompt_template=prompt_template,
+            prompt_version=prompt_version,
+            trace_id=trace_id,
             estimated_input_tokens=enforcement.get("estimated_input_tokens"),
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
@@ -1157,7 +1282,9 @@ class ModelGateway:
         circuit_key = self._circuit_key(self.primary_target, policy.task)
         if not self.circuit_breaker.can_attempt(circuit_key):
             raise self._circuit_open_error(
-                task=policy.task, request_id=request.request_id, trace_id=request.trace_id,
+                task=policy.task,
+                request_id=request.request_id,
+                trace_id=request.trace_id,
             )
         url = self._generate_url()
         payload = self._build_multimodal_generate_payload(
@@ -1178,7 +1305,8 @@ class ModelGateway:
             data = await self._post_json_with_retry(client, url=url, payload=payload, headers=headers, retries=retries)
         except Exception as exc:
             self.circuit_breaker.record_failure(
-                circuit_key, counts=counts_toward_breaker(classify_error(exc).kind),
+                circuit_key,
+                counts=counts_toward_breaker(classify_error(exc).kind),
             )
             duration_ms = int((time.time() - start) * 1000)
             self._record_usage(
@@ -1196,8 +1324,10 @@ class ModelGateway:
                 attempt_number=1,
                 estimated_input_tokens=request.estimated_input_tokens,
                 estimated_output_tokens=request.estimated_output_tokens,
-                data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-                pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                data_level=request.data_level,
+                pii_hit_codes=request.pii_hit_codes,
+                pii_hit_count=request.pii_hit_count,
+                redacted_count=request.redacted_count,
             )
             raise
         self.circuit_breaker.record_success(circuit_key)
@@ -1217,8 +1347,10 @@ class ModelGateway:
             attempt_number=1,
             estimated_input_tokens=request.estimated_input_tokens,
             estimated_output_tokens=request.estimated_output_tokens,
-            data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-            pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+            data_level=request.data_level,
+            pii_hit_codes=request.pii_hit_codes,
+            pii_hit_count=request.pii_hit_count,
+            redacted_count=request.redacted_count,
         )
         return response_excerpt
 
@@ -1244,9 +1376,14 @@ class ModelGateway:
         )
         safe_messages = self._rebuild_messages(messages, safe_pieces) if messages else messages
         request = self._build_request(
-            request_type="chat_stream", messages=safe_messages, temperature=temperature,
-            action=action, user_id=user_id, prompt_template=prompt_template,
-            prompt_version=prompt_version, trace_id=trace_id,
+            request_type="chat_stream",
+            messages=safe_messages,
+            temperature=temperature,
+            action=action,
+            user_id=user_id,
+            prompt_template=prompt_template,
+            prompt_version=prompt_version,
+            trace_id=trace_id,
             estimated_input_tokens=enforcement.get("estimated_input_tokens"),
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
@@ -1259,7 +1396,9 @@ class ModelGateway:
         targets = route_plan.targets
         if not targets:
             raise self._circuit_open_error(
-                task=policy.task, request_id=request.request_id, trace_id=request.trace_id,
+                task=policy.task,
+                request_id=request.request_id,
+                trace_id=request.trace_id,
             )
 
         async def stream_from_target(target: _ModelTarget, routing_stage: str, attempt_number: int):
@@ -1276,7 +1415,13 @@ class ModelGateway:
                         async with client.stream(
                             "POST",
                             self._chat_url(target),
-                            json=self._build_chat_payload(safe_messages, stream=True, temperature=resolved_temperature, target=target, max_tokens=max_tokens),
+                            json=self._build_chat_payload(
+                                safe_messages,
+                                stream=True,
+                                temperature=resolved_temperature,
+                                target=target,
+                                max_tokens=max_tokens,
+                            ),
                             headers=self._build_headers(target),
                         ) as resp:
                             resp.raise_for_status()
@@ -1301,15 +1446,25 @@ class ModelGateway:
                                     break
                             self.circuit_breaker.record_success(circuit_key)
                             self._record_target_usage(
-                                last_data, target, action, int((time.time() - start) * 1000), user_id,
-                                request_excerpt=request_excerpt, response_excerpt=full_response,
-                                prompt_template=prompt_template, prompt_version=prompt_version,
-                                request_id=request.request_id, routing_role=target.role, routing_stage=routing_stage,
+                                last_data,
+                                target,
+                                action,
+                                int((time.time() - start) * 1000),
+                                user_id,
+                                request_excerpt=request_excerpt,
+                                response_excerpt=full_response,
+                                prompt_template=prompt_template,
+                                prompt_version=prompt_version,
+                                request_id=request.request_id,
+                                routing_role=target.role,
+                                routing_stage=routing_stage,
                                 attempt_number=attempt_number,
                                 estimated_input_tokens=request.estimated_input_tokens,
                                 estimated_output_tokens=request.estimated_output_tokens,
-                                data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-                                pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                                data_level=request.data_level,
+                                pii_hit_codes=request.pii_hit_codes,
+                                pii_hit_count=request.pii_hit_count,
+                                redacted_count=request.redacted_count,
                                 **self._release_log_fields(route_plan.decision),
                             )
                             return
@@ -1321,18 +1476,31 @@ class ModelGateway:
                         await asyncio.sleep(RETRY_BACKOFF_SECONDS * attempt)
             except Exception as exc:
                 self.circuit_breaker.record_failure(
-                    circuit_key, counts=counts_toward_breaker(classify_error(exc).kind),
+                    circuit_key,
+                    counts=counts_toward_breaker(classify_error(exc).kind),
                 )
                 self._record_target_usage(
-                    {}, target, action, int((time.time() - start) * 1000), user_id,
-                    request_excerpt=request_excerpt, response_excerpt=full_response, error_message=str(exc), status="error",
-                    prompt_template=prompt_template, prompt_version=prompt_version,
-                    request_id=request.request_id, routing_role=target.role, routing_stage=routing_stage,
+                    {},
+                    target,
+                    action,
+                    int((time.time() - start) * 1000),
+                    user_id,
+                    request_excerpt=request_excerpt,
+                    response_excerpt=full_response,
+                    error_message=str(exc),
+                    status="error",
+                    prompt_template=prompt_template,
+                    prompt_version=prompt_version,
+                    request_id=request.request_id,
+                    routing_role=target.role,
+                    routing_stage=routing_stage,
                     attempt_number=attempt_number,
                     estimated_input_tokens=request.estimated_input_tokens,
                     estimated_output_tokens=request.estimated_output_tokens,
-                    data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-                    pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                    data_level=request.data_level,
+                    pii_hit_codes=request.pii_hit_codes,
+                    pii_hit_count=request.pii_hit_count,
+                    redacted_count=request.redacted_count,
                     **self._release_log_fields(route_plan.decision),
                 )
                 raise
@@ -1340,7 +1508,9 @@ class ModelGateway:
         for index, target in enumerate(targets):
             emitted = False
             try:
-                async for chunk in stream_from_target(target, "initial" if index == 0 else "fallback", attempt_number=index + 1):
+                async for chunk in stream_from_target(
+                    target, "initial" if index == 0 else "fallback", attempt_number=index + 1
+                ):
                     emitted = True
                     yield chunk
                 self._schedule_shadow_request(
@@ -1377,8 +1547,13 @@ class ModelGateway:
         )
         safe_texts = safe_pieces
         request = self._build_request(
-            request_type="embedding", texts=safe_texts, action=action, user_id=user_id,
-            prompt_template=None, prompt_version=None, trace_id=trace_id,
+            request_type="embedding",
+            texts=safe_texts,
+            action=action,
+            user_id=user_id,
+            prompt_template=None,
+            prompt_version=None,
+            trace_id=trace_id,
             estimated_input_tokens=enforcement.get("estimated_input_tokens"),
             estimated_output_tokens=enforcement.get("estimated_output_tokens"),
             **self._gate_audit_fields(gate_result),
@@ -1386,7 +1561,9 @@ class ModelGateway:
         circuit_key = self._circuit_key(self.primary_target, policy.task)
         if not self.circuit_breaker.can_attempt(circuit_key):
             raise self._circuit_open_error(
-                task=policy.task, request_id=request.request_id, trace_id=request.trace_id,
+                task=policy.task,
+                request_id=request.request_id,
+                trace_id=request.trace_id,
             )
 
         url = self._embedding_url()
@@ -1404,10 +1581,13 @@ class ModelGateway:
             start = time.time()
             request_excerpt = json.dumps({"input_count": len(batch), "sample": batch[:2]}, ensure_ascii=False)
             try:
-                data = await self._post_json_with_retry(client, url=url, payload=payload, headers=headers, retries=retries)
+                data = await self._post_json_with_retry(
+                    client, url=url, payload=payload, headers=headers, retries=retries
+                )
             except Exception as exc:
                 self.circuit_breaker.record_failure(
-                    circuit_key, counts=counts_toward_breaker(classify_error(exc).kind),
+                    circuit_key,
+                    counts=counts_toward_breaker(classify_error(exc).kind),
                 )
                 duration_ms = int((time.time() - start) * 1000)
                 self._record_usage(
@@ -1423,8 +1603,10 @@ class ModelGateway:
                     attempt_number=1,
                     estimated_input_tokens=request.estimated_input_tokens,
                     estimated_output_tokens=request.estimated_output_tokens,
-                    data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-                    pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                    data_level=request.data_level,
+                    pii_hit_codes=request.pii_hit_codes,
+                    pii_hit_count=request.pii_hit_count,
+                    redacted_count=request.redacted_count,
                 )
                 raise
             self.circuit_breaker.record_success(circuit_key)
@@ -1443,8 +1625,10 @@ class ModelGateway:
                 attempt_number=1,
                 estimated_input_tokens=request.estimated_input_tokens,
                 estimated_output_tokens=request.estimated_output_tokens,
-                data_level=request.data_level, pii_hit_codes=request.pii_hit_codes,
-                pii_hit_count=request.pii_hit_count, redacted_count=request.redacted_count,
+                data_level=request.data_level,
+                pii_hit_codes=request.pii_hit_codes,
+                pii_hit_count=request.pii_hit_count,
+                redacted_count=request.redacted_count,
             )
             embeddings.extend(adapter.extract_embeddings(data))
         return embeddings

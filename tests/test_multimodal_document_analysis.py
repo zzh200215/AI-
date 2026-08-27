@@ -36,9 +36,12 @@ class MultimodalDocumentAnalysisTests(unittest.TestCase):
 
     def test_table_rows_become_legal_clauses(self):
         words = [
-            self._word("事项", 0, top=10), self._word("约定", 120, top=10),
-            self._word("付款", 0, top=40), self._word("验收后30日", 120, top=40, width=70),
-            self._word("其他", 0, top=70), self._word("普通说明", 120, top=70, width=70),
+            self._word("事项", 0, top=10),
+            self._word("约定", 120, top=10),
+            self._word("付款", 0, top=40),
+            self._word("验收后30日", 120, top=40, width=70),
+            self._word("其他", 0, top=70),
+            self._word("普通说明", 120, top=70, width=70),
         ]
         tables, clauses = extract_table_clauses(words, page_number=3, ocr_confidence=0.8)
         self.assertEqual(len(tables), 1)

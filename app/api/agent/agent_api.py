@@ -371,17 +371,32 @@ def get_run_logs(run_id: int, db: Session = Depends(get_db), current_user: User 
 
 
 @router.post("/runs/{run_id}/cancel", response_model=AgentRunDetailOut)
-def cancel_run(run_id: int, req: AgentRunCancelRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def cancel_run(
+    run_id: int,
+    req: AgentRunCancelRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         run = agent_service.request_cancel(run_id, db=db, user_id=current_user.id, reason=req.reason)
-        oplog_service.log(module="agent", action="run_cancel_requested", db=db, user_id=current_user.id, target_type="agent_run", target_id=run.id, detail=req.reason or "")
+        oplog_service.log(
+            module="agent",
+            action="run_cancel_requested",
+            db=db,
+            user_id=current_user.id,
+            target_type="agent_run",
+            target_id=run.id,
+            detail=req.reason or "",
+        )
         return _serialize_run(run, logs=agent_service.get_run_logs(run.id, db, user_id=current_user.id))
     except ValueError as exc:
         raise api_error(400, "取消执行失败", code="AGENT_CANCEL_INVALID", detail=str(exc))
 
 
 @router.get("/metrics")
-def get_agent_metrics(days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_agent_metrics(
+    days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     return agent_service.get_run_metrics(db=db, user_id=current_user.id, days=days)
 
 
@@ -392,10 +407,34 @@ async def retry_run(run_id: int, db: Session = Depends(get_db), current_user: Us
         raise api_error(404, "运行记录不存在", code="AGENT_RUN_NOT_FOUND")
     if previous.status not in {"error", "cancelled", "completed"}:
         raise api_error(400, "当前运行不可重跑", code="AGENT_RETRY_INVALID")
-    run = await agent_service.run(goal=previous.goal, user_id=current_user.id, db=db, session_id=previous.session_id, max_steps=max(1, min(previous.total_steps or 5, 10)))
-    oplog_service.log(module="agent", action="run_retried", db=db, user_id=current_user.id, target_type="agent_run", target_id=run.id, detail=f"source_run_id={previous.id}")
+    run = await agent_service.run(
+        goal=previous.goal,
+        user_id=current_user.id,
+        db=db,
+        session_id=previous.session_id,
+        max_steps=max(1, min(previous.total_steps or 5, 10)),
+    )
+    oplog_service.log(
+        module="agent",
+        action="run_retried",
+        db=db,
+        user_id=current_user.id,
+        target_type="agent_run",
+        target_id=run.id,
+        detail=f"source_run_id={previous.id}",
+    )
     logs = agent_service.get_run_logs(run.id, db, user_id=current_user.id)
-    return AgentRunResponse(run_id=run.id, status=run.status, result=run.result, final_answer=run.final_answer, artifacts=agent_service.serialize_run(run).get("artifacts") or {}, supervisor_plan=agent_service.serialize_run(run).get("supervisor_plan") or {}, failure_reason=run.failure_reason, error=run.error, logs=[_serialize_log(item) for item in logs])
+    return AgentRunResponse(
+        run_id=run.id,
+        status=run.status,
+        result=run.result,
+        final_answer=run.final_answer,
+        artifacts=agent_service.serialize_run(run).get("artifacts") or {},
+        supervisor_plan=agent_service.serialize_run(run).get("supervisor_plan") or {},
+        failure_reason=run.failure_reason,
+        error=run.error,
+        logs=[_serialize_log(item) for item in logs],
+    )
 
 
 @router.get("/approvals", response_model=list[AgentApprovalRequestOut])
