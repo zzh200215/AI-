@@ -8,7 +8,8 @@ never bypasses document permissions, citation grounding, or refusal checks in
 from __future__ import annotations
 
 import time
-from typing import Any
+import uuid
+from typing import Any, TypedDict
 
 from app.core.async_utils import run_async
 from app.core.config import get_settings
@@ -17,7 +18,43 @@ from app.services.llm.llm_observability_service import llm_observability_service
 from app.services.llm.llm_service import llm_service
 from app.services.rag.rag_service import rag_service
 from app.services.rag.trace import get_last_trace
-from app.workflows.langgraph_compat import GRAPH_END, GRAPH_START, StateGraph, workflow_engine_name
+from app.workflows.langgraph_compat import (
+    GRAPH_END,
+    GRAPH_START,
+    StateGraph,
+    build_checkpointer,
+    workflow_engine_name,
+)
+
+
+class AgenticRAGState(TypedDict, total=False):
+    """Typed state channels for the bounded agentic-RAG graph.
+
+    Explicit schema (vs a bare ``dict``) documents the contract between nodes and
+    lets LangGraph validate/route on named channels.
+    """
+
+    question: str
+    active_query: str
+    document_id: int | None
+    user_id: int | None
+    knowledge_base_id: int | None
+    document_status: str | None
+    authorized_document_ids: list[int] | None
+    conversation_history: list[dict] | None
+    runtime_config: dict[str, Any]
+    max_rounds: int
+    round: int
+    retrieval_duration_ms: int
+    latest_chunks: list[Any]
+    latest_confidence: float
+    best_chunks: list[Any]
+    best_confidence: float
+    evidence_ready: bool
+    latest_retrieval_trace: dict[str, Any] | None
+    trace: list[dict[str, Any]]
+    started: float
+    result: dict[str, Any] | None
 
 
 class AgenticRAGService:
@@ -61,7 +98,7 @@ class AgenticRAGService:
         return f"{query}{suffix}"[:300]
 
     def _build_workflow(self):
-        graph = StateGraph(dict)
+        graph = StateGraph(AgenticRAGState)
         graph.add_node("plan", self._workflow_plan)
         graph.add_node("retrieve", self._workflow_retrieve)
         graph.add_node("assess_evidence", self._workflow_assess_evidence)
@@ -77,7 +114,9 @@ class AgenticRAGService:
         )
         graph.add_edge("refine", "retrieve")
         graph.add_edge("generate", GRAPH_END)
-        return graph.compile()
+        # checkpointer 让每次问答的图状态按 thread_id 落盘，可回放/断点续跑；
+        # 安装 langgraph-checkpoint-sqlite 后自动升级为跨进程重启持久化。
+        return graph.compile(checkpointer=build_checkpointer())
 
     async def _workflow_plan(self, state: dict[str, Any]) -> dict[str, Any]:
         query, mode = await self._plan_query(state["question"], user_id=state.get("user_id"))
@@ -260,7 +299,9 @@ class AgenticRAGService:
             "result": None,
             "latest_retrieval_trace": None,
         }
-        final_state = await self._workflow.ainvoke(state)
+        # thread_id 是 checkpointer 的持久化主键：一次问答一个线程，可按此回放该次检索的每一步状态。
+        config = {"configurable": {"thread_id": f"rag-{user_id or 'anon'}-{uuid.uuid4().hex}"}}
+        final_state = await self._workflow.ainvoke(state, config)
         return final_state["result"]
 
     def answer(self, question: str, **kwargs: Any) -> dict[str, Any]:

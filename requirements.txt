@@ -16,9 +16,13 @@ bcrypt>=4.0.0
 chromadb==0.5.20
 qdrant-client>=1.11.0
 neo4j>=5.26,<6
-langchain==0.3.7
-langchain-community==0.3.7
-langgraph>=0.2.0
+langchain==1.3.10
+langchain-community==0.4.2
+langchain-text-splitters==1.1.2
+langgraph==1.2.6
+langgraph-checkpoint==4.1.1
+# 可选：安装后 agentic-RAG / agent 图的 checkpoint 自动升级为跨进程重启持久化（SQLite 落盘）
+# langgraph-checkpoint-sqlite
 openai==1.54.4
 httpx==0.27.2
 PyPDF2==3.0.1
