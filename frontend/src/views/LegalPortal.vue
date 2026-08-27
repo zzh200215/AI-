@@ -367,11 +367,11 @@ onUnmounted(() => {
 .portal-welcome {
   font-size: 16px;
   font-weight: 700;
-  color: var(--color-text-primary, #1f2d3d);
+  color: var(--color-text);
 }
 .portal-org-name {
   font-size: 13px;
-  color: var(--color-text-muted, #8a94a6);
+  color: var(--color-text-muted);
 }
 
 .otp-actions {

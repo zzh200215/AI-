@@ -68,7 +68,6 @@
       <template #header>
         <div class="card-header-inline">
           <div>
-            <div class="section-eyebrow">Supervisor Plan</div>
             <span>Worker 编排</span>
           </div>
           <el-tag size="small" :type="supervisorPlan.plan_source === 'llm' ? 'success' : 'warning'">
@@ -249,9 +248,7 @@ const {
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .card-header-inline {
@@ -274,7 +271,7 @@ const {
   margin-bottom: var(--space-4);
   padding: var(--space-5);
   border-radius: var(--radius-xl);
-  background: var(--gradient-hero);
+  background: var(--color-surface);
   border: 1px solid var(--color-border-light);
   box-shadow: var(--shadow-xs);
 }
@@ -409,7 +406,7 @@ const {
 .artifact-summary-item strong {
   color: var(--color-text);
   font-size: var(--text-2xl);
-  font-weight: 800;
+  font-weight: 600;
 }
 .details-card,
 .summary-card {

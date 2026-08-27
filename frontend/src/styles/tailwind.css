@@ -1,49 +1,45 @@
 @import "tailwindcss";
 
+/* 与 design-tokens.css 同源：中性灰底 + 克制蓝。改色请两处一起改。 */
 @theme {
-  --color-background: #F6F8FF;
-  --color-foreground: #1A1A2E;
+  --color-background: #F7F8FA;
+  --color-foreground: #17181C;
   --color-card: #ffffff;
-  --color-card-foreground: #1A1A2E;
-  --color-muted: #F0F2FF;
-  --color-muted-foreground: #8A8AA8;
-  --color-border: #E4E8F8;
-  --color-input: #E4E8F8;
-  --color-ring: #4F6AF5;
-  --color-primary: #4F6AF5;
+  --color-card-foreground: #17181C;
+  --color-muted: #F1F2F4;
+  --color-muted-foreground: #767A85;
+  --color-border: #E3E5E9;
+  --color-input: #E3E5E9;
+  --color-ring: #3B5BDB;
+  --color-primary: #3B5BDB;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #4A4A68;
+  --color-secondary: #4B4F58;
   --color-secondary-foreground: #ffffff;
-  --color-accent: #F0F2FF;
-  --color-accent-foreground: #1A1A2E;
-  --radius-lg: 16px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
+  --color-accent: #EEF1FB;
+  --color-accent-foreground: #17181C;
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 }
 
 @layer base {
   body {
-    background: #F6F8FF;
+    background: #F7F8FA;
   }
 }
 
 @layer components {
   .ui-card {
-    @apply rounded-lg border border-slate-200 bg-white shadow-sm;
-    transition: box-shadow 200ms cubic-bezier(0.4, 0, 0.2, 1),
-                border-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
-                transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .ui-card:hover {
-    @apply shadow-md;
+    @apply rounded-md border border-slate-200 bg-white;
+    transition: border-color 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .ui-panel {
-    @apply rounded-lg border border-slate-200 bg-white/95 shadow-sm;
+    @apply rounded-md border border-slate-200 bg-white;
   }
 
   .ui-section-title {
-    @apply text-sm font-semibold text-slate-950;
+    @apply text-sm font-medium text-slate-950;
   }
 
   .ui-section-subtitle {

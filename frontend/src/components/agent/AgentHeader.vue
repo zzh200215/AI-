@@ -1,11 +1,6 @@
 <template>
   <div>
     <div class="page-header">
-      <div>
-        <div class="section-eyebrow">Agent Studio</div>
-        <h3>Agent配置</h3>
-        <p>输入目标后自动规划并连续执行；仅在创建任务、批量生成待办或查询敏感数据时请求确认。</p>
-      </div>
       <div class="header-tips">
         <span>推荐示例：</span>
         <el-button text @click="applyExample('总结文档 1，并提取其中的风险点')">文档风险</el-button>
@@ -35,7 +30,6 @@
     <section class="expert-directory" aria-label="专家角色目录">
       <div class="directory-heading">
         <div>
-          <div class="section-eyebrow">Expert Roles</div>
           <strong>企业专家协作网络</strong>
         </div>
         <span>总管负责编排，专家负责结论，执行层只处理已确认动作。</span>
@@ -62,7 +56,6 @@
 
     <div class="agent-command-bar">
       <div class="command-copy">
-        <div class="section-eyebrow">Execution Control</div>
         <strong>低风险步骤自动执行，敏感动作按需确认</strong>
         <span>适合处理文档风险、合同审查、法律咨询和跨模块串联动作。</span>
       </div>
@@ -96,28 +89,23 @@ const {
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .page-header {
   display: flex;
-  justify-content: space-between;
-  gap: var(--space-6);
-  align-items: flex-start;
-  padding: var(--space-6);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-xl);
-  background: var(--gradient-hero);
-  box-shadow: var(--shadow-xs);
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
 .page-header h3 {
   margin: 0 0 var(--space-2);
   font-size: var(--text-3xl);
   color: var(--color-text);
-  letter-spacing: 0;
-  font-weight: 800;
+  font-weight: 600;
 }
 .page-header p,
 .header-tips {
@@ -131,7 +119,6 @@ const {
   gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
-  justify-content: flex-end;
 }
 .overview-strip {
   display: grid;
@@ -151,7 +138,6 @@ const {
 .overview-tile:hover {
   box-shadow: var(--shadow-card-hover);
   border-color: var(--color-border-hover);
-  transform: translateY(-2px);
 }
 .overview-tile span {
   font-size: var(--text-xs);
@@ -161,7 +147,7 @@ const {
   color: var(--color-text);
   font-size: var(--text-2xl);
   line-height: var(--text-2xl-lh);
-  font-weight: 800;
+  font-weight: 600;
 }
 .overview-tile p {
   margin: 0;
@@ -261,9 +247,7 @@ const {
   padding: var(--space-5) var(--space-6);
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-xl);
-  background:
-    radial-gradient(circle at 90% 20%, rgba(39, 189, 245, 0.14), transparent 32%),
-    var(--gradient-hero);
+  background: var(--color-surface);
   box-shadow: var(--shadow-xs);
 }
 .command-copy {
@@ -287,7 +271,7 @@ const {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-full);
   background: var(--color-primary-light);
-  border: 1px solid rgba(79, 106, 245, 0.16);
+  border: 1px solid var(--color-border);
   color: var(--color-primary);
   font-size: var(--text-xs);
   font-weight: 600;

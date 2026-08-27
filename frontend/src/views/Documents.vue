@@ -1,11 +1,6 @@
 <template>
   <div class="documents-page">
     <div class="page-header">
-      <div class="page-heading-copy">
-        <span class="section-eyebrow">Legal Knowledge Base</span>
-        <h3>法律知识库</h3>
-        <p>上传法规、案例、合同模板与文书模板，解析入库后可围绕法律依据进行检索、引用溯源与文档对比。</p>
-      </div>
       <div class="upload-console">
         <el-upload
           class="upload-dropzone"
@@ -97,25 +92,17 @@ onUnmounted(() => {
   max-width: 1600px;
 }
 .page-header {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-6);
-  align-items: stretch;
-  padding: var(--space-6);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-xl);
-  background: var(--gradient-hero);
-  box-shadow: var(--shadow-xs);
-}
-.page-heading-copy {
-  max-width: 680px;
+  display: block;
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
 .page-header h3 {
   margin: var(--space-1) 0 var(--space-2);
   color: var(--color-text);
   font-size: var(--text-3xl);
-  font-weight: 800;
-  letter-spacing: 0;
+  font-weight: 600;
 }
 .page-header p {
   max-width: 720px;
@@ -126,9 +113,7 @@ onUnmounted(() => {
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .overview-metrics {
@@ -149,7 +134,6 @@ onUnmounted(() => {
 .metric-tile:hover {
   box-shadow: var(--shadow-card-hover);
   border-color: var(--color-border-hover);
-  transform: translateY(-2px);
 }
 .metric-tile span {
   font-size: var(--text-xs);
@@ -159,10 +143,10 @@ onUnmounted(() => {
   font-size: var(--text-3xl);
   line-height: var(--text-3xl-lh);
   color: var(--color-text);
-  font-weight: 800;
+  font-weight: 600;
 }
 .upload-console {
-  width: min(420px, 100%);
+  width: 100%;
   display: grid;
   gap: var(--space-2);
 }
@@ -174,17 +158,17 @@ onUnmounted(() => {
 }
 :deep(.upload-dropzone .el-upload-dragger) {
   width: 100%;
-  height: 124px;
+  height: 104px;
   border-radius: var(--radius-md);
   border-color: var(--color-border-hover);
-  background: var(--color-primary-light);
+  background: var(--color-surface-subtle);
   padding: 0;
-  transition: all var(--transition-fast);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
 }
+/* 拖拽区不加彩色底与外发光环：整块蓝面是页面里最抢眼的“模板色块” */
 :deep(.upload-dropzone .el-upload-dragger:hover) {
   border-color: var(--color-primary);
-  background: #EAF8FF;
-  box-shadow: 0 0 0 4px var(--color-primary-subtle);
+  background: var(--color-bg);
 }
 .upload-dropzone-inner {
   height: 100%;
@@ -194,8 +178,9 @@ onUnmounted(() => {
   text-align: center;
 }
 .upload-dropzone-inner strong {
-  color: var(--color-primary);
+  color: var(--color-text);
   font-size: var(--text-base);
+  font-weight: 500;
 }
 .upload-dropzone-inner span {
   color: var(--color-text-muted);

@@ -113,7 +113,7 @@ defineEmits(['retry'])
   border-radius: var(--radius-full);
   background: var(--el-color-danger);
   color: #fff;
-  font-weight: 800;
+  font-weight: 600;
   display: grid;
   place-items: center;
   font-size: var(--text-sm);

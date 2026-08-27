@@ -219,13 +219,13 @@ const windowNote = (row) => {
   width: 100%;
   height: 14px;
   border-radius: 7px;
-  background: var(--color-border, #e5e7eb);
+  background: var(--color-border);
   overflow: hidden;
 }
 .funnel-bar {
   height: 100%;
   border-radius: 7px;
-  background: linear-gradient(90deg, #6d7bf7, #8b5cf6);
+  background: var(--color-primary);
   transition: width 0.3s ease;
 }
 </style>

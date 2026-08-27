@@ -2,7 +2,6 @@
   <div class="login-page">
     <div class="login-brand">
       <div class="brand-content">
-        <div class="brand-kicker">法律智能工作台</div>
         <div class="brand-title-row">
           <div class="brand-mark">律</div>
           <div>
@@ -10,19 +9,22 @@
             <p class="brand-subtitle">法律检索、合同审查、文书草稿与律师审核</p>
           </div>
         </div>
-        <div class="brand-metrics">
-          <div><strong>RAG</strong><span>法规检索</span></div>
-          <div><strong>Agent</strong><span>合同审查</span></div>
-          <div><strong>Ops</strong><span>律师审核</span></div>
-        </div>
-        <div class="brand-feature-list">
-          <span>法律咨询与事实补充</span>
-          <span>合同条款风险识别</span>
-          <span>法律文书草稿生成</span>
-          <span>律师审核与版本留痕</span>
-        </div>
+        <ul class="brand-capabilities">
+          <li>
+            <strong>法规与案例检索</strong>
+            <span>混合召回与重排序，答案标注引用出处与法源有效性</span>
+          </li>
+          <li>
+            <strong>合同条款风险识别</strong>
+            <span>逐条定位风险与缺失义务，给出页码与原文依据</span>
+          </li>
+          <li>
+            <strong>文书草稿与律师审核</strong>
+            <span>草稿生成后转入律师审核，保留修改痕迹与版本记录</span>
+          </li>
+        </ul>
       </div>
-      <div class="brand-footer">律智检 Law Intelligence</div>
+      <p class="brand-footer">本系统用于法律工作辅助，模型输出需由具备资质的人员复核后使用。</p>
     </div>
 
     <div class="login-form-panel">
@@ -171,9 +173,7 @@ const handleRegister = async () => {
 .login-page {
   display: flex;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 16% 12%, rgba(79, 106, 245, 0.16), transparent 34%),
-    linear-gradient(135deg, #FFFFFF 0%, #F0F2FF 52%, #EAF8FF 100%);
+  background: var(--color-bg);
 }
 
 .login-brand {
@@ -183,133 +183,84 @@ const handleRegister = async () => {
   justify-content: center;
   align-items: flex-start;
   position: relative;
-  background: transparent;
+  background: var(--color-bg);
   color: var(--color-text);
-  overflow: hidden;
   padding: 56px 72px;
-}
-.login-brand::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse at 20% 44%, rgba(79, 106, 245, 0.12) 0%, transparent 58%),
-    radial-gradient(ellipse at 80% 20%, rgba(34, 197, 94, 0.10) 0%, transparent 48%);
-  pointer-events: none;
 }
 
 .brand-content {
-  position: relative;
-  z-index: 1;
-  max-width: 560px;
-}
-
-.brand-kicker {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  margin-bottom: 18px;
-  color: var(--color-primary);
-  letter-spacing: 0;
-  text-transform: uppercase;
+  max-width: 520px;
 }
 
 .brand-title-row {
   display: flex;
-  gap: 16px;
-  align-items: flex-start;
+  gap: 14px;
+  align-items: center;
 }
 
 .brand-mark {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-sm);
-  background: var(--gradient-brand);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-xs);
+  background: var(--color-primary);
   color: #ffffff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-weight: 800;
-  font-size: 18px;
+  font-weight: 600;
+  font-size: 16px;
   flex-shrink: 0;
-  box-shadow: 0 14px 32px rgba(79, 106, 245, 0.28);
 }
 
 .brand-title {
-  font-size: 34px;
-  font-weight: 800;
-  margin: 0 0 8px;
-  letter-spacing: 0;
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 4px;
   color: var(--color-text);
 }
 
 .brand-subtitle {
   font-size: var(--text-base);
-  color: var(--color-text-secondary);
-  margin: 0;
-  line-height: 1.6;
-}
-
-.brand-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 40px;
-}
-
-.brand-metrics div {
-  padding: 16px;
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(10px);
-  box-shadow: var(--shadow-xs);
-  display: grid;
-  gap: 6px;
-  transition: all var(--transition-fast);
-}
-.brand-metrics div:hover {
-  background: #ffffff;
-  border-color: var(--color-border-hover);
-  box-shadow: var(--shadow-card-hover);
-  transform: translateY(-2px);
-}
-
-.brand-metrics strong {
-  color: var(--color-text);
-  font-size: var(--text-2xl);
-}
-
-.brand-metrics span {
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  margin: 0;
+  line-height: 1.5;
 }
 
-.brand-feature-list {
+.brand-capabilities {
+  list-style: none;
+  margin: 40px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.brand-capabilities li {
   display: grid;
-  gap: 10px;
-  margin-top: 28px;
-  font-size: var(--text-sm);
+  gap: 3px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--color-border);
 }
 
-.brand-feature-list span {
-  padding-left: 14px;
-  border-left: 2px solid var(--color-primary);
-  color: var(--color-text-secondary);
-  transition: all var(--transition-fast);
+.brand-capabilities strong {
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--color-text);
 }
-.brand-feature-list span:hover {
-  border-left-color: var(--color-accent);
-  padding-left: 18px;
-  color: var(--color-primary);
+
+.brand-capabilities span {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-text-muted);
 }
 
 .brand-footer {
   position: absolute;
   left: 72px;
+  right: 72px;
   bottom: 32px;
+  margin: 0;
   font-size: var(--text-xs);
+  line-height: 1.6;
   color: var(--color-text-muted);
-  letter-spacing: 0;
 }
 
 .login-form-panel {
@@ -317,10 +268,8 @@ const handleRegister = async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.88);
-  border-left: 1px solid rgba(228, 232, 248, 0.82);
-  box-shadow: -20px 0 50px rgba(79, 106, 245, 0.08);
-  backdrop-filter: blur(18px);
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
   padding: 48px;
 }
 
@@ -335,16 +284,15 @@ const handleRegister = async () => {
 
 .form-header h2 {
   margin: 0 0 6px;
-  font-size: var(--text-3xl);
-  font-weight: 700;
+  font-size: var(--text-2xl);
+  font-weight: 600;
   color: var(--color-text);
-  letter-spacing: -0.02em;
 }
 
 .form-header p {
   margin: 0 0 18px;
   font-size: var(--text-sm);
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
 }
 
 .login-tabs {
@@ -353,7 +301,7 @@ const handleRegister = async () => {
 
 .login-tabs :deep(.el-tabs__item) {
   font-size: var(--text-base);
-  font-weight: 500;
+  font-weight: 400;
   height: 40px;
   line-height: 40px;
   color: var(--color-text-muted);
@@ -361,11 +309,6 @@ const handleRegister = async () => {
 
 .login-tabs :deep(.el-tabs__item.is-active) {
   color: var(--color-primary);
-}
-
-.login-tabs :deep(.el-tabs__active-bar) {
-  height: 2.5px;
-  border-radius: 2px;
 }
 
 .login-tabs :deep(.el-tabs__nav-wrap::after) {
@@ -393,8 +336,7 @@ const handleRegister = async () => {
 .submit-btn {
   width: 100%;
   margin-top: 8px;
-  font-weight: 800;
-  letter-spacing: 0;
+  font-weight: 500;
   height: 44px !important;
 }
 
@@ -410,21 +352,21 @@ const handleRegister = async () => {
     flex-direction: column;
   }
   .login-brand {
-    padding: 48px 24px 80px;
-    min-height: 320px;
+    position: static;
+    padding: 48px 24px 32px;
   }
   .login-form-panel {
     width: 100%;
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
     padding: 40px 24px;
   }
-  .brand-title {
-    font-size: var(--text-3xl);
-  }
-  .brand-metrics {
-    grid-template-columns: 1fr 1fr;
+  .brand-capabilities {
+    margin-top: 28px;
   }
   .brand-footer {
-    left: 24px;
+    position: static;
+    margin-top: 24px;
   }
 }
 </style>

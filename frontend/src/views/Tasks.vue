@@ -1,12 +1,5 @@
 <template>
   <div class="task-page">
-    <div class="page-heading">
-      <div>
-        <h3>待办任务</h3>
-        <p>统一查看来源任务、协作进度和执行记录。</p>
-      </div>
-    </div>
-
     <div class="task-overview">
       <div class="overview-tile">
         <span>任务总数</span>
@@ -34,7 +27,6 @@
       <template #header>
         <div class="section-header">
           <div>
-            <div class="section-eyebrow">Task Center</div>
             <span>任务操作台</span>
           </div>
         </div>
@@ -477,34 +469,11 @@ watch(detailVisible, (visible) => {
   gap: var(--space-6);
 }
 
-.page-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-4);
-  align-items: flex-end;
-  padding: var(--space-6);
-}
-.page-heading h3 {
-  margin: 0;
-  font-size: var(--text-3xl);
-  line-height: 1.15;
-  color: var(--color-text);
-  letter-spacing: 0;
-  font-weight: 800;
-}
-.page-heading p {
-  margin: var(--space-2) 0 0;
-  color: var(--color-text-secondary);
-  font-size: var(--text-base);
-  line-height: 1.6;
-}
 
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 
@@ -527,7 +496,6 @@ watch(detailVisible, (visible) => {
 .overview-tile:hover {
   box-shadow: var(--shadow-card-hover);
   border-color: var(--color-border-hover);
-  transform: translateY(-2px);
 }
 .overview-tile span {
   font-size: var(--text-xs);
@@ -537,7 +505,7 @@ watch(detailVisible, (visible) => {
   color: var(--color-text);
   font-size: var(--text-3xl);
   line-height: var(--text-3xl-lh);
-  font-weight: 800;
+  font-weight: 600;
 }
 .overview-tile p {
   margin: 0;
@@ -607,7 +575,6 @@ watch(detailVisible, (visible) => {
   border-color: var(--color-primary);
   background: var(--color-primary-light);
   box-shadow: var(--shadow-sm);
-  transform: translateY(-2px);
 }
 .kanban-task:active {
   transform: translateY(0);

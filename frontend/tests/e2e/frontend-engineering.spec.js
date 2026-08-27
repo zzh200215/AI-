@@ -71,7 +71,7 @@ test('capability：管理员可进入系统中心', async ({ page }) => {
 test('offline：断网时展示离线横幅并保留缓存内容', async ({ page, context }) => {
   await mockApi(page, 'user')
   await page.goto('/documents')
-  await expect(page.getByRole('heading', { name: '法律知识库', level: 3 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '法律知识库', level: 1 })).toBeVisible()
   await expect(page.locator('.doc-item', { hasText: '测试法规.txt' })).toBeVisible()
   await context.setOffline(true)
   await expect(page.getByText('网络不可用，已暂停刷新与同步。恢复网络后自动继续。')).toBeVisible()

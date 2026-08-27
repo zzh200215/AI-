@@ -4,7 +4,6 @@
       <template #header>
         <div class="card-header-inline">
           <div>
-            <div class="section-eyebrow">Analysis</div>
             <span>单文档分析工作区</span>
           </div>
           <el-space>
@@ -171,7 +170,6 @@
 
     <div v-if="analysis" class="content-section-head">
       <div>
-        <div class="section-eyebrow">Insight Output</div>
         <h4>分析结果</h4>
       </div>
       <span>摘要、风险、待办、条款与结构化字段统一查看</span>
@@ -181,7 +179,6 @@
 
     <div v-if="compareResult" class="content-section-head">
       <div>
-        <div class="section-eyebrow">Compare</div>
         <h4>多文档对比</h4>
       </div>
       <span>用于校验条款差异、风险偏差和动作建议</span>
@@ -331,7 +328,6 @@
 
     <div v-if="createdTasks.length" class="content-section-head">
       <div>
-        <div class="section-eyebrow">Task Output</div>
         <h4>任务产出</h4>
       </div>
       <span>从文档待办直接生成任务并进入任务中心</span>
@@ -415,9 +411,7 @@ const {
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .toolbar-meta {
@@ -446,7 +440,6 @@ const {
 .workspace-tile:hover {
   box-shadow: var(--shadow-card-hover);
   border-color: var(--color-border-hover);
-  transform: translateY(-2px);
 }
 .workspace-tile span {
   font-size: var(--text-xs);
@@ -587,7 +580,7 @@ const {
   padding: var(--space-5);
   border-radius: var(--radius-xl);
   border: 1px solid var(--color-border-light);
-  background: var(--gradient-hero);
+  background: var(--color-surface);
   margin-bottom: var(--space-5);
 }
 .compare-hero-copy {

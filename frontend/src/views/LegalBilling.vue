@@ -648,9 +648,9 @@ onUnmounted(() => {
 }
 
 .no-case-hint {
-  background: #fdf6ec;
-  border: 1px solid #f5dab1;
-  color: #b88230;
+  background: var(--color-warning-light);
+  border: 1px solid #F0E2CC;
+  color: var(--color-warning);
   border-radius: 6px;
   padding: 10px 14px;
   margin-bottom: 16px;

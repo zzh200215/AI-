@@ -1,9 +1,7 @@
 <template>
   <div class="pricing-page">
-    <div class="pricing-header">
-      <h2 class="pricing-title">订阅方案</h2>
-      <p class="pricing-sub">按团队配额计费，AI 咨询/合同审查/文书草稿共享额度</p>
-      <el-tag v-if="myPlan" size="small" type="success" effect="plain">当前方案：{{ myPlan.name }}（{{ myPlan.status }}）</el-tag>
+    <div v-if="myPlan" class="pricing-header">
+      <el-tag size="small" type="success" effect="plain">当前方案：{{ myPlan.name }}（{{ myPlan.status }}）</el-tag>
     </div>
 
     <div class="plan-grid" v-if="plans.length">
@@ -97,21 +95,11 @@ onMounted(load)
 
 <style scoped>
 .pricing-page {
-  padding: 24px;
-  max-width: 960px;
-  margin: 0 auto;
+  display: grid;
+  gap: var(--space-4);
 }
 .pricing-header {
-  margin-bottom: 24px;
-}
-.pricing-title {
-  margin: 0 0 4px;
-  font-size: 20px;
-}
-.pricing-sub {
-  margin: 0 0 8px;
-  color: #909399;
-  font-size: 13px;
+  margin: 0;
 }
 .plan-grid {
   display: grid;
@@ -119,15 +107,15 @@ onMounted(load)
   gap: 16px;
 }
 .plan-card {
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
 }
 .plan-card.current {
-  border-color: #67c23a;
-  box-shadow: 0 0 0 1px #67c23a;
+  border-color: var(--color-success);
+  box-shadow: 0 0 0 1px var(--color-success);
 }
 .plan-card-head {
   display: flex;
@@ -146,17 +134,17 @@ onMounted(load)
   font-weight: 700;
 }
 .price-unit {
-  color: #909399;
+  color: var(--color-text-muted);
   margin-left: 2px;
 }
 .plan-desc {
-  color: #606266;
+  color: var(--color-text-secondary);
   font-size: 12px;
   min-height: 32px;
 }
 .plan-quotas {
   padding-left: 18px;
-  color: #606266;
+  color: var(--color-text-secondary);
   font-size: 13px;
   line-height: 1.9;
   flex: 1;

@@ -225,7 +225,7 @@ const structuredFieldCount = (value) => {
   padding: var(--space-5);
   border-radius: var(--radius-xl);
   border: 1px solid var(--color-border-light);
-  background: var(--gradient-hero);
+  background: var(--color-surface);
   box-shadow: var(--shadow-xs);
 }
 .insight-hero-copy {

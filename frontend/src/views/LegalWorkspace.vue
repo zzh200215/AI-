@@ -556,7 +556,7 @@ onMounted(() => {
 
 .stat-mini strong {
   font-size: 22px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .return-reason-list {

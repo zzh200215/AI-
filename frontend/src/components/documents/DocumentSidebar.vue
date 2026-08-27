@@ -3,7 +3,6 @@
     <template #header>
       <div class="card-header-inline">
         <div>
-          <div class="section-eyebrow">Document Rail</div>
           <span>文档资源栏</span>
         </div>
         <el-button text @click="fetchDocuments">刷新</el-button>
@@ -222,9 +221,7 @@ const {
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .toolbar-meta {
@@ -258,7 +255,7 @@ const {
   gap: var(--space-2);
 }
 .governance-box {
-  background: #EAF8FF;
+  background: var(--color-surface-subtle);
   display: grid;
   gap: var(--space-2);
 }
@@ -371,7 +368,6 @@ const {
   border-color: var(--color-primary);
   background: var(--color-primary-light);
   box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
 }
 .doc-item:active {
   transform: translateY(0);

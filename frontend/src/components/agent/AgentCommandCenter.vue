@@ -27,7 +27,6 @@
         <template #header>
           <div class="card-header-inline">
             <div>
-              <div class="section-eyebrow">Preset Context</div>
               <span>{{ demoPreset.title }}</span>
             </div>
             <el-tag size="small" type="warning">标准演示链路</el-tag>
@@ -171,9 +170,7 @@ const {
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .card-header-inline {

@@ -1,12 +1,5 @@
 <template>
   <div class="system-page">
-    <div class="page-heading">
-      <div>
-        <h3>系统中心</h3>
-        <p>统一查看平台健康、成本使用、反馈闭环和任务运行状态。</p>
-      </div>
-    </div>
-
     <SystemOverviewBar :active-tab="activeTab" />
 
     <el-tabs v-model="activeTab" class="system-tabs" @tab-change="syncTabQuery">
@@ -114,27 +107,6 @@ watch(
   overflow-x: hidden;
 }
 
-.page-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-4);
-  align-items: center;
-  padding: var(--space-6);
-}
-.page-heading h3 {
-  margin: 0;
-  font-size: var(--text-3xl);
-  line-height: 1.15;
-  color: var(--color-text);
-  letter-spacing: 0;
-  font-weight: 800;
-}
-.page-heading p {
-  margin: var(--space-1) 0 0;
-  color: var(--color-text-secondary);
-  font-size: var(--text-base);
-  line-height: 1.6;
-}
 
 /* ─── Tabs ─── */
 :deep(.system-tabs > .el-tabs__header) {

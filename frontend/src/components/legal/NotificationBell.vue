@@ -100,46 +100,43 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 
 .bell-pill {
   position: relative;
-  min-height: 32px;
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  width: 100%;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border-light);
-  background: #ffffff;
-  box-shadow: var(--shadow-xs);
-  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 2px 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  color: var(--color-text-secondary);
+  font-weight: 400;
+  color: var(--color-text-muted);
   cursor: pointer;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .bell-pill:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-  color: var(--color-primary);
-  border-color: rgba(79, 106, 245, 0.3);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .bell-badge {
   position: absolute;
-  top: -5px;
-  right: -2px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
-  background: var(--color-danger, #ef4444);
+  background: var(--color-danger);
   color: #ffffff;
-  font-size: 11px;
-  font-weight: 800;
+  font-size: 10px;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -166,7 +163,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 
 .bell-heading {
   font-size: var(--text-sm);
-  font-weight: 800;
+  font-weight: 600;
   color: var(--color-text);
 }
 

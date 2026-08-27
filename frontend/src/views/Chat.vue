@@ -44,7 +44,7 @@
       <div class="border-t border-slate-200 px-4 py-3">
         <div class="flex items-center gap-2 text-xs text-slate-500">
           <span class="h-2 w-2 rounded-full" :class="loading ? 'bg-amber-500' : 'bg-emerald-500'"></span>
-          <span>{{ loading ? 'AI 正在生成' : '实时通道待命' }}</span>
+          <span>{{ loading ? '正在生成回复' : '实时通道待命' }}</span>
         </div>
       </div>
     </aside>
@@ -52,17 +52,20 @@
     <section class="ui-card flex min-h-0 flex-col overflow-hidden">
       <header class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
         <div>
-          <div class="text-base font-semibold text-slate-950">RAG 法律对话</div>
-          <div class="mt-1 text-xs text-slate-500">用户消息靠右，AI 消息靠左，流式内容会逐字追加。</div>
+          <div class="text-base font-semibold text-slate-950">法律对话</div>
+          <div class="mt-1 text-xs text-slate-500">结合知识库检索，回答附带法条与案例引用。</div>
         </div>
-        <div class="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-          WebSocket
+        <div class="flex items-center gap-2 text-xs text-slate-500">
+          <span class="h-2 w-2 rounded-full" :class="connected ? 'bg-emerald-500' : 'bg-slate-300'"></span>
+          <span>{{ connected ? '实时通道已连接' : '连接中' }}</span>
         </div>
       </header>
 
       <div class="chat-scroll flex-1 overflow-auto bg-slate-50/70 px-6 py-5">
         <div v-if="!messages.length" class="mx-auto flex h-full max-w-2xl flex-col items-center justify-center text-center">
-          <div class="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-600 text-sm font-semibold text-white">AI</div>
+          <div class="empty-icon mb-4 flex h-12 w-12 items-center justify-center rounded-lg">
+            <el-icon :size="22"><ChatLineRound /></el-icon>
+          </div>
           <div class="text-lg font-semibold text-slate-950">开始一次法律对话</div>
           <p class="mt-2 text-sm leading-6 text-slate-500">可以询问法律依据、条款解释、风险识别或文书草稿。涉及知识库的问题建议到知识库页选择文档后提问。</p>
         </div>
@@ -122,6 +125,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { ChatLineRound } from '@element-plus/icons-vue'
 import { ElButton } from 'element-plus/es/components/button/index'
 import { ElInput } from 'element-plus/es/components/input/index'
 import { ElMessage } from 'element-plus/es/components/message/index'
@@ -132,6 +136,7 @@ import 'element-plus/es/components/input/style/css'
 const messages = ref([])
 const input = ref('')
 const loading = ref(false)
+const connected = ref(false)
 const currentSessionId = ref(null)
 const preferences = ref([])
 const preferencesOpen = ref(false)
@@ -152,6 +157,7 @@ const connectWS = () => {
   ws = new WebSocket(wsUrl, ['json', `bearer.${token}`])
 
   ws.onopen = () => {
+    connected.value = true
   }
 
   ws.onmessage = (event) => {
@@ -190,6 +196,7 @@ const connectWS = () => {
   }
 
   ws.onclose = (e) => {
+    connected.value = false
     const last = messages.value[messages.value.length - 1]
     if (last && last.role === 'assistant' && last.streaming === true) {
       last.streaming = false
@@ -293,7 +300,7 @@ onUnmounted(() => {
 
 .chat-page :deep(.bg-slate-50),
 .chat-page :deep(.bg-slate-50\/70) {
-  background: linear-gradient(180deg, #FFFFFF 0%, #F6F8FF 100%);
+  background: var(--color-surface-subtle);
 }
 
 .chat-page :deep(.bg-blue-50),
@@ -303,7 +310,7 @@ onUnmounted(() => {
 }
 
 .chat-page :deep(.bg-blue-600) {
-  background: var(--gradient-brand);
+  background: var(--color-primary);
 }
 
 .chat-page :deep(.text-blue-700),
@@ -332,6 +339,12 @@ onUnmounted(() => {
 
 .cursor-blink {
   animation: blink 1s step-end infinite;
+}
+
+.empty-icon {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-muted);
 }
 
 .chat-scroll {
@@ -364,7 +377,7 @@ onUnmounted(() => {
 .send-button {
   min-width: 92px;
   height: 56px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-lg);
 }
 
 :deep(.chat-input .el-textarea__inner) {
@@ -397,6 +410,5 @@ onUnmounted(() => {
 }
 :deep(.chat-message-bubble:hover) {
   box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
 }
 </style>

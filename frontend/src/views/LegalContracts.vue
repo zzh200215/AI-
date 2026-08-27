@@ -14,7 +14,7 @@
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="openVersions(row)">版本</el-button>
           <el-button size="small" text @click="openMilestones(row)">关键节点</el-button>
-          <el-button size="small" text @click="openDiff(row)">Diff</el-button>
+          <el-button size="small" text @click="openDiff(row)">版本对比</el-button>
           <el-tooltip v-if="!signingEnabled" content="电子签署服务未配置（试点暂不开放）" placement="top">
             <span><el-button size="small" text type="info" disabled>签署</el-button></span>
           </el-tooltip>
@@ -46,7 +46,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="diffVisible" :title="`${selected?.title || ''} - 版本 Diff`" width="760px">
+    <el-dialog v-model="diffVisible" :title="`${selected?.title || ''} - 版本对比`" width="760px">
       <div class="diff-controls">
         <el-select v-model="diffBase" placeholder="基准版本"><el-option v-for="v in versions" :key="v.id" :label="`V${v.version_no}`" :value="v.version_no" /></el-select>
         <el-select v-model="diffTarget" placeholder="目标版本"><el-option v-for="v in versions" :key="v.id" :label="`V${v.version_no}`" :value="v.version_no" /></el-select>
@@ -121,5 +121,5 @@ onMounted(loadFeatures)
 <style scoped>
 .toolbar,.diff-controls,.version-create { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
 .version-create { align-items:flex-start; }.version-create .el-textarea { flex:1; }
-.diff-result { max-height:360px; overflow:auto; padding:12px; background:#f6f7f9; white-space:pre-wrap; }
+.diff-result { max-height:360px; overflow:auto; padding:12px; background:var(--color-surface-subtle); white-space:pre-wrap; }
 </style>

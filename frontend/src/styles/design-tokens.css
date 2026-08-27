@@ -5,65 +5,79 @@
 
 :root {
   /* ─── Color Palette ─── */
-  --color-primary:          #4F6AF5;
-  --color-primary-hover:    #4058E8;
-  --color-primary-active:   #3448D0;
-  --color-primary-light:    #F0F2FF;
-  --color-primary-subtle:   rgba(79, 106, 245, 0.10);
+  /* 主色仅用于选中态、链接与主按钮；面板、文字、边框一律走中性灰。 */
+  --color-primary:          #3B5BDB;
+  --color-primary-hover:    #3450C4;
+  --color-primary-active:   #2C44A8;
+  --color-primary-light:    #EEF1FB;
+  --color-primary-subtle:   rgba(59, 91, 219, 0.10);
 
-  --color-accent:           #28B8F6;
-  --color-accent-hover:     #119DE0;
-  --color-accent-light:     #EAF8FF;
+  --color-accent:           #0E7490;
+  --color-accent-hover:     #0B5F76;
+  --color-accent-light:     #ECF4F7;
 
-  --color-secondary:        #5B6CF6;
-  --color-secondary-hover:  #4657DF;
-  --color-secondary-light:  #F4F5FF;
+  --color-secondary:        #4A5568;
+  --color-secondary-hover:  #3B4453;
+  --color-secondary-light:  #F1F2F4;
 
-  --color-success:          #22C55E;
-  --color-success-light:    #ECFDF3;
-  --color-danger:           #ef4444;
-  --color-danger-light:     #fef2f2;
-  --color-warning:          #F59E0B;
-  --color-warning-light:    #FFF8E6;
-  --color-info:             #8A8AA8;
-  --color-info-light:       #F5F6FF;
+  /* 语义色按“可作为浅底上的文字”取值，保证 4.5:1 对比度 */
+  --color-success:          #15803D;
+  --color-success-light:    #EDF7F0;
+  --color-danger:           #C0392B;
+  --color-danger-light:     #FBEEEC;
+  --color-warning:          #B45309;
+  --color-warning-light:    #FBF3E8;
+  --color-info:             #767A85;
+  --color-info-light:       #F1F2F4;
+
+  /* 关键日期类型分类色：用于日历圆点、图例与 effect="dark" 标签（白字）。
+     取值已逐个校验 vs #fff ≥ 4.5:1；原先直接用 Element 默认色（#f56c6c/#e6a23c/
+     #409eff/#67c23a/#909399/#b37feb）配白字只有 2.2–3.1:1，读不清。 */
+  --color-cat-hearing:      #B3261E;
+  --color-cat-defense:      #A15C07;
+  --color-cat-appeal:       #3B5BDB;
+  --color-cat-performance:  #15803D;
+  --color-cat-payment:      #4B5563;
+  --color-cat-expiry:       #9A3412;
+  --color-cat-custom:       #6D28D9;
 
   /* ─── Surface & Background ─── */
-  --color-bg:               #F6F8FF;
-  --color-bg-alt:           #F0F2FF;
-  --color-surface:          #ffffff;
-  --color-surface-hover:    #FAFBFF;
-  --color-surface-soft:     rgba(255, 255, 255, 0.86);
+  --color-bg:               #F7F8FA;
+  --color-bg-alt:           #F1F2F4;
+  --color-surface:          #FFFFFF;
+  --color-surface-subtle:   #FAFAFB;
+  --color-surface-hover:    #F7F8FA;
+  --color-surface-soft:     #FFFFFF;
 
   /* ─── Text ─── */
-  --color-text:             #1A1A2E;
-  --color-text-secondary:   #4A4A68;
-  --color-text-muted:       #8A8AA8;
-  --color-text-inverse:     #ffffff;
+  --color-text:             #17181C;
+  --color-text-secondary:   #4B4F58;
+  --color-text-muted:       #767A85;
+  --color-text-inverse:     #FFFFFF;
 
   /* ─── Border ─── */
-  --color-border:           #E4E8F8;
-  --color-border-light:     #F0F2FF;
-  --color-border-hover:     #C8D0FF;
+  --color-border:           #E3E5E9;
+  --color-border-light:     #EDEEF1;
+  --color-border-hover:     #CFD2D8;
 
-  /* ─── Shadow (premium depth hierarchy) ─── */
-  --shadow-xs:              0 4px 14px rgba(79, 106, 245, 0.06);
-  --shadow-sm:              0 8px 24px rgba(79, 106, 245, 0.08);
-  --shadow-md:              0 12px 32px rgba(79, 106, 245, 0.10);
-  --shadow-lg:              0 18px 46px rgba(79, 106, 245, 0.12);
-  --shadow-xl:              0 26px 60px rgba(26, 26, 46, 0.16);
-  --shadow-card-hover:      0 14px 34px rgba(79, 106, 245, 0.14);
+  /* ─── Shadow：中性、紧实。层级靠 1px 边框表达，阴影只做贴合感，不做光晕 ─── */
+  --shadow-xs:              0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-sm:              0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md:              0 2px 6px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-lg:              0 8px 20px rgba(16, 24, 40, 0.10), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --shadow-xl:              0 16px 40px rgba(16, 24, 40, 0.14), 0 4px 10px rgba(16, 24, 40, 0.06);
+  --shadow-card-hover:      0 2px 6px rgba(16, 24, 40, 0.10), 0 1px 2px rgba(16, 24, 40, 0.05);
 
-  /* ─── Border Radius (simplified scale) ─── */
-  --radius-xs:              4px;
-  --radius-sm:              8px;
-  --radius-md:              12px;
-  --radius-lg:              16px;
-  --radius-xl:              22px;
+  /* ─── Border Radius：工具型产品口径，避免过圆的“气泡感” ─── */
+  --radius-xs:              3px;
+  --radius-sm:              6px;
+  --radius-md:              8px;
+  --radius-lg:              10px;
+  --radius-xl:              12px;
   --radius-full:            9999px;
 
   /* ─── Typography ─── */
-  --font-family:            Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-family:            system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --font-mono:              'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
 
   --text-xs:                11px;
@@ -107,15 +121,9 @@
   --z-modal:                1000;
 }
 
-/* ─── Gradients (clean, contemporary) ─── */
-:root {
-  --gradient-brand:         linear-gradient(135deg, #4F6AF5 0%, #27BDF5 100%);
-  --gradient-brand-hover:   linear-gradient(135deg, #4058E8 0%, #16A9E5 100%);
-  --gradient-surface:       linear-gradient(180deg, #ffffff 0%, #FAFBFF 100%);
-  --gradient-glow:          radial-gradient(ellipse at 50% 0%, rgba(79, 106, 245, 0.12) 0%, transparent 68%);
-  --gradient-hero:          linear-gradient(135deg, #FFFFFF 0%, #F0F2FF 58%, #EAF8FF 100%);
-  --gradient-success:       linear-gradient(135deg, #22C55E 0%, #8DD85F 100%);
-}
+/* 说明：品牌渐变（--gradient-brand / -hero / -success / -glow / -surface）已移除。
+   渐变底 + 彩色光晕是这套 UI 最主要的“模板感”来源；改为纯色面 + 1px 中性边框，
+   需要弱层次时用 --color-surface-subtle。 */
 
 html,
 body,
@@ -167,9 +175,8 @@ body {
 .app-readonly-banner {
   padding: var(--space-4) var(--space-5);
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--color-border);
   background: var(--color-surface);
-  transition: box-shadow var(--transition-fast);
 }
 
 .app-section-intro {
@@ -197,11 +204,12 @@ body {
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
-  background: var(--gradient-surface);
+  background: var(--color-surface-subtle);
 }
 
 .app-readonly-banner {
-  background: linear-gradient(180deg, rgba(255, 251, 235, 0.96), rgba(255, 247, 237, 0.92));
+  background: var(--color-warning-light);
+  border-color: #F0E2CC;
 }
 
 .app-empty-note {
@@ -212,16 +220,15 @@ body {
 /* Shared page chrome */
 .page-heading,
 .page-header {
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-xl);
-  background: var(--gradient-hero);
-  box-shadow: var(--shadow-xs);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
 
 .page-heading h3,
 .page-header h3 {
   color: var(--color-text);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .section-eyebrow,
@@ -229,8 +236,7 @@ body {
 .summary-label,
 .metric-label {
   color: var(--color-text-muted);
-  font-weight: 800;
-  letter-spacing: 0;
+  font-weight: 500;
 }
 
 .overview-tile,
@@ -240,12 +246,13 @@ body {
 .dialog-metric,
 .artifact-summary-item,
 .detail-metric {
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--color-border);
   background: #ffffff;
-  box-shadow: var(--shadow-xs);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+  box-shadow: none;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 
+/* 数据块不做悬浮位移与光晕：读数用的面不该浮起来 */
 .overview-tile:hover,
 .metric-tile:hover,
 .summary-metric:hover,
@@ -253,9 +260,7 @@ body {
 .artifact-summary-item:hover,
 .detail-metric:hover {
   border-color: var(--color-border-hover);
-  background: #ffffff;
-  box-shadow: var(--shadow-card-hover);
-  transform: translateY(-2px);
+  background: var(--color-surface-subtle);
 }
 
 .toolbar-card,

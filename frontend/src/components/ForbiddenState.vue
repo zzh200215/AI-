@@ -38,7 +38,7 @@ defineProps({
   border-radius: var(--radius-full);
   background: var(--color-danger-light);
   color: var(--el-color-danger);
-  font-weight: 800;
+  font-weight: 600;
   font-size: var(--text-base);
   display: grid;
   place-items: center;

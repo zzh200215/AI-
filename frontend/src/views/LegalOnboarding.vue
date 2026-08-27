@@ -1,12 +1,8 @@
 <template>
   <main class="onboarding">
-    <div class="onboarding-head">
-      <h2>法律工作台引导</h2>
-      <p>按你的角色完成前几步，10 分钟出第一个成果，再进入工作台继续。</p>
-    </div>
     <el-card class="onboarding-card">
       <div class="role-row">
-        <span class="role-label">我的角色：</span>
+        <span class="role-label">我的角色</span>
         <el-radio-group v-model="role">
           <el-radio-button :value="'solo_lawyer'">独立律师</el-radio-button>
           <el-radio-button :value="'firm_admin'">律所管理员</el-radio-button>
@@ -18,7 +14,7 @@
       </el-steps>
       <div class="onboarding-actions">
         <el-button @click="complete">保存进度</el-button>
-        <el-button type="primary" @click="enterWorkspace">进入工作台 →</el-button>
+        <el-button type="primary" @click="enterWorkspace">进入工作台</el-button>
       </div>
     </el-card>
   </main>
@@ -78,11 +74,10 @@ function enterWorkspace() {
 }
 </script>
 <style scoped>
-.onboarding { max-width: 760px; margin: 32px auto; padding: 0 20px; }
-.onboarding-head p { color: var(--color-text-muted); margin: 8px 0 20px; }
-.onboarding-card { padding: 8px; }
-.role-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.role-label { font-weight: 600; }
-.steps { margin: 24px 0; }
-.onboarding-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px; }
+.onboarding { max-width: 640px; }
+.onboarding-card { padding: 0; }
+.role-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.role-label { font-size: var(--text-sm); color: var(--color-text-muted); }
+.steps { margin: 24px 0 8px; }
+.onboarding-actions { display: flex; justify-content: flex-end; gap: 12px; padding-top: 16px; border-top: 1px solid var(--color-border); }
 </style>

@@ -182,9 +182,10 @@ const deadlineTypes = [
 ]
 
 const typeColor = (t) => ({
-  hearing: '#f56c6c', defense: '#e6a23c', appeal: '#409eff',
-  performance: '#67c23a', payment: '#909399', expiry: '#c45656', custom: '#b37feb',
-}[t] || '#909399')
+  hearing: 'var(--color-cat-hearing)', defense: 'var(--color-cat-defense)', appeal: 'var(--color-cat-appeal)',
+  performance: 'var(--color-cat-performance)', payment: 'var(--color-cat-payment)',
+  expiry: 'var(--color-cat-expiry)', custom: 'var(--color-cat-custom)',
+}[t] || 'var(--color-cat-payment)')
 
 const typeLabel = (t) => deadlineTypes.find(d => d.value === t)?.label || t
 
@@ -338,9 +339,9 @@ onMounted(() => {
 }
 
 .no-case-hint {
-  background: #fdf6ec;
-  border: 1px solid #f5dab1;
-  color: #b88230;
+  background: var(--color-warning-light);
+  border: 1px solid #F0E2CC;
+  color: var(--color-warning);
   border-radius: 6px;
   padding: 10px 14px;
   margin-bottom: 16px;

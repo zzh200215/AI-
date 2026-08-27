@@ -19,11 +19,6 @@
   </div>
 
   <div class="system-command-bar">
-    <div class="command-copy">
-      <div class="section-eyebrow">平台控制</div>
-      <strong>运维与质量控制台</strong>
-      <span>集中处理健康检查、成本、反馈、审批和后台任务。</span>
-    </div>
     <div class="command-chips">
       <span class="command-chip">当前标签：{{ activeTab }}</span>
       <span class="command-chip">失败任务：{{ failedTaskCount }}</span>
@@ -63,12 +58,9 @@ const { approvalStats } = useSystemApprovals({ client: api, message: ElMessage }
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
-
 .overview-tile {
   padding: var(--space-5) var(--space-5);
   border-radius: var(--radius-lg);
@@ -82,7 +74,6 @@ const { approvalStats } = useSystemApprovals({ client: api, message: ElMessage }
 .overview-tile:hover {
   box-shadow: var(--shadow-card-hover);
   border-color: var(--color-border-hover);
-  transform: translateY(-2px);
 }
 .overview-tile span {
   font-size: var(--text-xs);
@@ -92,36 +83,22 @@ const { approvalStats } = useSystemApprovals({ client: api, message: ElMessage }
   font-size: var(--text-3xl);
   line-height: var(--text-3xl-lh);
   color: var(--color-text);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .system-command-bar {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: var(--space-4);
   align-items: center;
   flex-wrap: wrap;
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-xl);
-  background:
-    radial-gradient(circle at 92% 16%, rgba(39, 189, 245, 0.14), transparent 32%),
-    var(--gradient-hero);
+  background: var(--color-surface);
   box-shadow: var(--shadow-xs);
 }
 
-.command-copy {
-  display: grid;
-  gap: 4px;
-}
-.command-copy strong {
-  color: var(--color-text);
-  font-size: var(--text-lg);
-}
-.command-copy span {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-}
 .command-chips {
   display: flex;
   gap: var(--space-2);
@@ -131,7 +108,7 @@ const { approvalStats } = useSystemApprovals({ client: api, message: ElMessage }
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-full);
   background: var(--color-primary-light);
-  border: 1px solid rgba(79, 106, 245, 0.16);
+  border: 1px solid var(--color-border);
   color: var(--color-primary);
   font-size: var(--text-xs);
   font-weight: 600;

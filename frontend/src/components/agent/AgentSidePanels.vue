@@ -4,7 +4,6 @@
       <template #header>
         <div class="card-header-inline">
           <div>
-            <div class="section-eyebrow">Human Review</div>
             <span>待审批操作</span>
           </div>
           <el-button size="small" @click="fetchApprovals">刷新</el-button>
@@ -38,7 +37,6 @@
       <template #header>
         <div class="card-header-inline">
           <div>
-            <div class="section-eyebrow">Run History</div>
             <span>运行历史</span>
           </div>
           <el-button size="small" @click="fetchHistory">刷新</el-button>
@@ -109,9 +107,7 @@ const {
 .section-eyebrow {
   margin-bottom: 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .card-header-inline {
