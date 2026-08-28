@@ -16,7 +16,7 @@ from app.mcp.permissions import (
     canonical_agent_type,
 )
 from app.mcp.registry import mcp_registry
-from app.models.agent import AgentRun, ToolCallLog
+from app.models.agent import AgentApprovalRequest, AgentRun, ToolCallLog
 from app.models.user import User
 from app.services.agent.agent_approval_service import agent_approval_service
 from app.services.agent.agent_audit import (
@@ -73,7 +73,9 @@ from app.services.memory.conversation_memory_service import conversation_memory_
 from app.workflows.langgraph_compat import (
     GRAPH_END,
     GRAPH_START,
+    INTERRUPT_AVAILABLE,
     RUNTIME_CONTEXT_KEY,
+    Command,
     StateGraph,
     build_checkpointer,
     workflow_engine_name,
@@ -824,7 +826,18 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         graph.add_edge("parallel_aggregate", GRAPH_END)
         graph.add_edge("cancelled", GRAPH_END)
         graph.add_edge("evidence_insufficient", GRAPH_END)
-        graph.add_edge("awaiting_approval", GRAPH_END)
+        # awaiting_approval 是 interrupt 断点：首次进入时挂起（图在此结束，等人工审批），
+        # Command(resume=...) 后同一节点内执行写工具并清掉 awaiting_approval，再按预算回 decide。
+        # "awaiting_approval" 分支留给无 interrupt 能力的回退引擎：停在此节点直接结束。
+        graph.add_conditional_edges(
+            "awaiting_approval",
+            self._workflow_route_continue,
+            {
+                "continue": "decide",
+                "partial": "partial",
+                "awaiting_approval": GRAPH_END,
+            },
+        )
         return graph.compile(checkpointer=build_checkpointer())
 
     @staticmethod
@@ -1154,6 +1167,210 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                 self._sync_a2a_delegation(db, agent_run)
                 raise ValueError("Agent run deadline exceeded; pending approval not executed")
 
+        logs = self.get_run_logs(agent_run.id, db, user_id=user_id)
+        pending_log = next((item for item in reversed(logs) if item.status == "pending_approval"), None)
+        if not pending_log:
+            raise ValueError("Pending approval step not found")
+        # 审批绑定的参数以该步日志为准（与 require_executable 的摘要比对同源）。
+        action_input = _json_loads_dict(pending_log.input_params)
+        action_input.pop("_master_agent", None)
+        action_input.pop("_worker_agent", None)
+
+        graph_snapshot = self._pending_approval_interrupt(agent_run)
+        if graph_snapshot is not None:
+            return await self._resume_via_interrupt(
+                db=db,
+                user_id=user_id,
+                agent_run=agent_run,
+                approval=approval,
+                pending_log=pending_log,
+                action_input=action_input,
+                snapshot_values=dict(graph_snapshot.values or {}),
+                event_callback=event_callback,
+            )
+        return await self._resume_via_db_snapshot(
+            db=db,
+            user_id=user_id,
+            agent_run=agent_run,
+            approval=approval,
+            pending_log=pending_log,
+            action_input=action_input,
+            logs=logs,
+            event_callback=event_callback,
+        )
+
+    def _pending_approval_interrupt(self, agent_run: AgentRun) -> Any | None:
+        """该 Run 的图线程上是否停在审批断点；是则返回 checkpoint 快照。
+
+        返回 None 的情形：回退引擎（无 checkpoint 机制）、checkpoint 已被清理、
+        或 Run 发起于本能力上线之前——这些都退回「从 DB 快照重建 state」的恢复路径。
+        """
+        if not INTERRUPT_AVAILABLE or not hasattr(self._workflow, "get_state"):
+            return None
+        try:
+            snapshot = self._workflow.get_state(self._graph_config(agent_run))
+        except Exception:  # noqa: BLE001 - checkpoint 不可读时退回 DB 快照恢复
+            return None
+        if "awaiting_approval" not in tuple(getattr(snapshot, "next", ()) or ()):
+            return None
+        return snapshot if getattr(snapshot, "interrupts", ()) else None
+
+    def _claim_approval_for_execution(
+        self,
+        *,
+        db: Session,
+        user_id: int,
+        agent_run: AgentRun,
+        approval: AgentApprovalRequest,
+        pending_log: ToolCallLog,
+        action_input: dict[str, Any],
+        execution_agent: str,
+    ) -> None:
+        """执行前的两道闸：参数漂移守卫 + approved → executed 的原子认领（CAS）。
+
+        两者都在图外完成。守卫失败时图仍停在断点上，凭新建的审批单可以再次 resume。
+        """
+        from app.services.agent.agent_approval_service import ApprovalStateError
+
+        try:
+            agent_approval_service.require_executable(
+                db=db, approval_id=approval.id, user_id=user_id, current_params=action_input
+            )
+        except ApprovalStateError as exc:
+            agent_approval_service.create_request(
+                db=db,
+                user_id=user_id,
+                tool_name=pending_log.tool_name,
+                input_params=action_input,
+                agent_type=execution_agent,
+                agent_run_id=agent_run.id,
+                step_id=pending_log.step,
+            )
+            self._save_run(db, agent_run, status="awaiting_approval", final_answer="审批参数已变化，需重新审批。")
+            raise ValueError(f"Approval parameters changed; re-approval required: {exc}") from exc
+        if not agent_approval_service.try_claim_execution(db=db, approval_id=approval.id, user_id=user_id):
+            self._save_run(db, agent_run, status="running", final_answer="审批已被并发恢复流程执行，本次请求跳过。")
+            raise ValueError("Approval already claimed by a concurrent resume")
+
+    def _approval_resume_payload(
+        self,
+        *,
+        approval: AgentApprovalRequest,
+        pending_log: ToolCallLog,
+        action_input: dict[str, Any],
+        execution_agent: str,
+        agent_run: AgentRun,
+    ) -> dict[str, Any]:
+        """送回断点的审批结论：只放可序列化数据，它会作为 resume 值写进 checkpoint。"""
+        return {
+            "approval_id": approval.id,
+            "agent_type": execution_agent,
+            "tool_name": pending_log.tool_name,
+            "action_input": action_input,
+            "raw_decision": pending_log.raw_decision or "",
+            "step": pending_log.step or int(agent_run.total_steps or 0),
+            "decision_note": approval.decision_note or "审批通过后已恢复执行",
+        }
+
+    async def _resume_via_interrupt(
+        self,
+        *,
+        db: Session,
+        user_id: int,
+        agent_run: AgentRun,
+        approval: AgentApprovalRequest,
+        pending_log: ToolCallLog,
+        action_input: dict[str, Any],
+        snapshot_values: dict[str, Any],
+        event_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    ) -> AgentRun:
+        """图原生恢复：``Command(resume=...)`` 把审批结论送回 awaiting_approval 断点。
+
+        messages / worker_plan / handoffs / task_contract / worker_index 等全部由
+        checkpoint 还原，这里不再从 DB 重建——只需要重新提供不可序列化的运行时上下文。
+        """
+        supervisor_plan = snapshot_values.get("supervisor_plan")
+        if not isinstance(supervisor_plan, dict):
+            supervisor_plan = {}
+        execution_agent = canonical_agent_type(
+            str(
+                approval.agent_type
+                or snapshot_values.get("current_worker_agent")
+                or snapshot_values.get("worker_agent")
+                or "supervisor_agent"
+            )
+        )
+        runtime = AgentRuntime(
+            db=db,
+            agent_run=agent_run,
+            user_id=user_id,
+            event_callback=event_callback,
+            model=AgentRunState(
+                run_id=agent_run.id,
+                user_id=user_id,
+                status=STATUS_RUNNING,
+                node="decide",
+                step=int(snapshot_values.get("step") or 0),
+                trace_id=agent_run.trace_id,
+                organization_id=agent_run.organization_id,
+                plan=AgentPlan.from_dict(supervisor_plan),
+                run_deadline_at=agent_run.run_deadline_at.isoformat() if agent_run.run_deadline_at else None,
+                retry_count=int(snapshot_values.get("retry_count") or 0),
+            ),
+        )
+        await self._emit_event(
+            event_callback,
+            {
+                "type": "run_resumed",
+                "run_id": agent_run.id,
+                "approval_request_id": approval.id,
+                "tool_name": pending_log.tool_name,
+            },
+        )
+        self._save_run(db, agent_run, status="running", final_answer=None, completed_at=None)
+        self._claim_approval_for_execution(
+            db=db,
+            user_id=user_id,
+            agent_run=agent_run,
+            approval=approval,
+            pending_log=pending_log,
+            action_input=action_input,
+            execution_agent=execution_agent,
+        )
+        await self._workflow.ainvoke(
+            Command(
+                resume=self._approval_resume_payload(
+                    approval=approval,
+                    pending_log=pending_log,
+                    action_input=action_input,
+                    execution_agent=execution_agent,
+                    agent_run=agent_run,
+                )
+            ),
+            self._graph_config(agent_run),
+            context=runtime,
+        )
+        result_run = runtime.final_run or agent_run
+        self._sync_a2a_delegation(db, result_run)
+        return result_run
+
+    async def _resume_via_db_snapshot(
+        self,
+        *,
+        db: Session,
+        user_id: int,
+        agent_run: AgentRun,
+        approval: AgentApprovalRequest,
+        pending_log: ToolCallLog,
+        action_input: dict[str, Any],
+        logs: list[ToolCallLog],
+        event_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    ) -> AgentRun:
+        """无可用断点时的恢复：从 DB 的 workflow_state 快照重建整份 state。
+
+        回退引擎没有 checkpoint，只能走这条路；真 langgraph 下则是 checkpoint 缺失
+        （被清理 / Run 早于该能力上线）时的兜底。
+        """
         run_payload = _json_loads_dict(agent_run.result)
         snapshot = self._load_workflow_snapshot(agent_run)
         master_agent = str(run_payload.get("master_agent") or "supervisor_agent")
@@ -1191,10 +1408,6 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         if worker_index < 0 or worker_index >= len(worker_plan):
             worker_index = worker_plan.index(worker_agent) if worker_agent in worker_plan else len(worker_plan) - 1
         max_steps = int(run_payload.get("max_steps") or max(int(agent_run.total_steps or 0) + 1, 5))
-        logs = self.get_run_logs(agent_run.id, db, user_id=user_id)
-        pending_log = next((item for item in reversed(logs) if item.status == "pending_approval"), None)
-        if not pending_log:
-            raise ValueError("Pending approval step not found")
 
         resume_step = pending_log.step or int(agent_run.total_steps or 0)
         resume_retry_count = int(snapshot.get("retry_count") or 0)
@@ -1236,110 +1449,28 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             final_answer=None,
             completed_at=None,
         )
-        decision = _normalize_decision(pending_log.raw_decision or "")
-        action_input = _json_loads_dict(pending_log.input_params)
-        action_input.pop("_master_agent", None)
-        action_input.pop("_worker_agent", None)
-
         execution_agent = canonical_agent_type(approval.agent_type or worker_agent)
-        # 审批参数守卫：审批后参数变化/审批过期 → 必须重新审批，不执行工具。
-        from app.services.agent.agent_approval_service import ApprovalStateError
-
-        try:
-            agent_approval_service.require_executable(
-                db=db, approval_id=approval.id, user_id=user_id, current_params=action_input
-            )
-        except ApprovalStateError as exc:
-            agent_approval_service.create_request(
-                db=db,
-                user_id=user_id,
-                tool_name=pending_log.tool_name,
-                input_params=action_input,
-                agent_type=execution_agent,
-                agent_run_id=agent_run.id,
-                step_id=pending_log.step,
-            )
-            self._save_run(db, agent_run, status="awaiting_approval", final_answer="审批参数已变化，需重新审批。")
-            raise ValueError(f"Approval parameters changed; re-approval required: {exc}")
-
-        # 执行前原子认领 approved → executed（CAS），防止并发恢复导致写工具重复执行。
-        if not agent_approval_service.try_claim_execution(db=db, approval_id=approval.id, user_id=user_id):
-            self._save_run(db, agent_run, status="running", final_answer="审批已被并发恢复流程执行，本次请求跳过。")
-            raise ValueError("Approval already claimed by a concurrent resume")
-
-        result, serialized_input = await self._execute_tool(
-            pending_log.tool_name,
-            action_input,
-            user_id,
-            db,
-            agent_type=execution_agent,
-            agent_run_id=agent_run.id,
-            skip_approval=True,
-            step_id=pending_log.step,
-            trace_id=agent_run.trace_id,
-            organization_id=agent_run.organization_id,
-            cancel_check=lambda: self._is_cancel_requested(runtime),
-        )
-        result.setdefault("data", {})
-        if isinstance(result["data"], dict):
-            result["data"].setdefault("master_agent", master_agent)
-            result["data"].setdefault("worker_agent", execution_agent)
-        observation = _json_dumps(result)
-        duration_ms = 0
-        status = "success" if result.get("success") else "error"
-        error = result.get("error")
-
-        self._update_log(
-            db,
-            pending_log,
-            status="approved",
-            error=None,
-            output_result="approval_granted",
-        )
-        logged_input = json.loads(serialized_input) if serialized_input else action_input
-        logged_input["_master_agent"] = master_agent
-        logged_input["_worker_agent"] = execution_agent
-        new_log = self._create_log(
+        self._claim_approval_for_execution(
             db=db,
-            agent_run_id=agent_run.id,
-            step=pending_log.step or int(agent_run.total_steps or 0),
-            decision=decision,
-            raw_decision=pending_log.raw_decision or "",
-            tool_name=pending_log.tool_name,
-            input_params=logged_input,
-            observation=observation,
-            output_result=observation,
-            status=status,
-            error=error,
-            duration_ms=duration_ms,
-        )
-        await self._emit_event(
-            event_callback,
-            {
-                "type": "step_completed",
-                "run_id": agent_run.id,
-                "log": self.serialize_log(new_log),
-                "master_agent": master_agent,
-                "worker_agent": execution_agent,
-            },
-        )
-        agent_approval_service.mark_executed(
-            db=db,
-            approval_id=approval.id,
             user_id=user_id,
-            decision_note=approval.decision_note or "审批通过后已恢复执行",
+            agent_run=agent_run,
+            approval=approval,
+            pending_log=pending_log,
+            action_input=action_input,
+            execution_agent=execution_agent,
         )
+
         messages = self._rebuild_messages_from_logs(
             goal=agent_run.goal,
             worker_agent=worker_agent,
             user_id=user_id,
             db=db,
             session_id=agent_run.session_id,
-            logs=self.get_run_logs(agent_run.id, db, user_id=user_id),
+            logs=logs,
             task_contract=task_contract,
         )
         memory_context = conversation_memory_service.build_agent_context(db, user_id, agent_run.session_id)
-        state = {
+        state: dict[str, Any] = {
             "goal": agent_run.goal,
             "user_id": user_id,
             "session_id": agent_run.session_id,
@@ -1351,7 +1482,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             "supervisor_plan": supervisor_plan,
             "task_contract": task_contract,
             "messages": messages,
-            "last_observation": observation,
+            "last_observation": "",
             "step": resume_step,
             "evidence_scope_seen": self._has_evidence_source_logs(logs),
             "worker_plan": worker_plan,
@@ -1362,17 +1493,28 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             "parallel_pending": False,
             "parallel_results": snapshot.get("parallel_results") or {},
             "retry_count": resume_retry_count,
+            # 待执行的这一步：与图原生断点恢复时 checkpoint 里的通道保持同名同义。
+            "current_decision": _normalize_decision(pending_log.raw_decision or ""),
+            "current_raw": pending_log.raw_decision or "",
+            "current_tool_name": pending_log.tool_name,
+            "current_safe_input": action_input,
+            "current_worker_agent": execution_agent,
+            "awaiting_approval": True,
+            "pending_approval_request_id": approval.id,
         }
-        self._save_workflow_snapshot(
-            runtime,
-            state,
-            node="decide",
-            last_observation=observation,
-            failure_reason=_sanitize_agent_error_message(error),
-            total_steps=state["step"],
+        # 与图原生断点共用同一段执行逻辑：已获批写工具只有一处执行入口。
+        state = await self._workflow_execute_approved_tool(
+            {**state, RUNTIME_CONTEXT_KEY: runtime},
+            self._approval_resume_payload(
+                approval=approval,
+                pending_log=pending_log,
+                action_input=action_input,
+                execution_agent=execution_agent,
+                agent_run=agent_run,
+            ),
         )
-        if state["step"] >= max_steps:
-            state["awaiting_approval"] = False
+        state.pop(RUNTIME_CONTEXT_KEY, None)
+        if int(state.get("step") or 0) >= max_steps:
             await self._workflow_partial({**state, RUNTIME_CONTEXT_KEY: runtime})
             result_run = runtime.final_run or agent_run
             self._sync_a2a_delegation(db, result_run)

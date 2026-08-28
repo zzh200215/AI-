@@ -115,6 +115,33 @@ def workflow_engine_name() -> str:
     return "langgraph" if LANGGRAPH_AVAILABLE else "internal_state_graph"
 
 
+def _interrupt_unsupported(value: Any) -> Any:
+    """回退引擎没有 checkpoint，中断点无处保存，也就无法 resume。"""
+    _ = value
+    raise RuntimeError("graph interrupt requires langgraph with a checkpointer")
+
+
+class _CommandUnsupported:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        _ = (args, kwargs)
+        raise RuntimeError("Command(resume=...) requires langgraph with a checkpointer")
+
+
+if LANGGRAPH_AVAILABLE:
+    try:
+        from langgraph.types import Command, interrupt
+
+        INTERRUPT_AVAILABLE = True
+    except Exception:
+        Command = _CommandUnsupported  # type: ignore[assignment,misc]
+        interrupt = _interrupt_unsupported  # type: ignore[assignment]
+        INTERRUPT_AVAILABLE = False
+else:
+    Command = _CommandUnsupported  # type: ignore[assignment,misc]
+    interrupt = _interrupt_unsupported  # type: ignore[assignment]
+    INTERRUPT_AVAILABLE = False
+
+
 def _checkpoint_db_path() -> str:
     """每次调用时读环境变量，测试可重定向到临时目录而不用关心导入顺序。"""
     return os.environ.get("LANGGRAPH_CHECKPOINT_DB", _DEFAULT_CHECKPOINT_DB_PATH)

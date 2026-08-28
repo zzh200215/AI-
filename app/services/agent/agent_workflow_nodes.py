@@ -11,6 +11,7 @@ from typing import Any
 
 from app.core.time import utc_now
 from app.mcp.permissions import canonical_agent_type
+from app.services.agent.agent_approval_service import agent_approval_service
 from app.services.agent.agent_json import json_dumps as _json_dumps
 from app.services.agent.agent_prompts import (
     EVIDENCE_GATED_WRITE_TOOLS,
@@ -21,6 +22,7 @@ from app.services.agent.agent_prompts import (
 )
 from app.services.agent.agent_run_state import AgentRunState
 from app.services.agent.agent_runtime import resolve_runtime
+from app.workflows.langgraph_compat import INTERRUPT_AVAILABLE, interrupt
 
 # 连续非法决策（retry）上限：达到后强制收敛为 finish，避免挤占受限的步骤预算。
 MAX_CONSECUTIVE_RETRIES = 3
@@ -699,6 +701,7 @@ class AgentWorkflowNodesMixin:
             )
             runtime.final_run = awaiting_run
             state["awaiting_approval"] = True
+            state["pending_approval_request_id"] = int(approval_request_id) if approval_request_id else None
             return state
         if state["current_tool_name"] in EVIDENCE_SOURCE_TOOLS and result.get("success"):
             state["evidence_scope_seen"] = True
@@ -715,6 +718,127 @@ class AgentWorkflowNodesMixin:
         return state
 
     async def _workflow_awaiting_approval(self, state: dict[str, Any]) -> dict[str, Any]:
+        """人在回路断点：图原生 ``interrupt()`` / ``Command(resume=...)``。
+
+        ``interrupt()`` 之前不能有任何副作用——LangGraph 恢复时从节点开头**重跑**整段逻辑
+        （见 ``langgraph.types.interrupt`` 文档），前置副作用会在每次 resume 时重复发生。
+
+        回退引擎没有 checkpoint，中断点无处保存，退化为「停在本节点、图正常结束」，
+        由 ``resume_after_approval`` 从 DB 快照重建状态后调用下面的执行段。
+        """
+        if not INTERRUPT_AVAILABLE:
+            return state
+        approved = interrupt(
+            {
+                "kind": "tool_approval",
+                "approval_request_id": state.get("pending_approval_request_id"),
+                "tool_name": state.get("current_tool_name"),
+                "step": state.get("step"),
+            }
+        )
+        # —— 以下仅在收到 Command(resume=...) 后执行 ——
+        return await self._workflow_execute_approved_tool(state, approved if isinstance(approved, dict) else {})
+
+    async def _workflow_execute_approved_tool(
+        self,
+        state: dict[str, Any],
+        approved: dict[str, Any],
+    ) -> dict[str, Any]:
+        """执行已获批的写工具，并把该步日志从 pending_approval 收敛为终态。
+
+        图原生恢复与回退引擎恢复共用这一段，写工具的执行路径只有一处。
+        参数漂移守卫与 approved→executed 的 CAS 认领在图外（``resume_after_approval``）
+        完成：守卫失败时中断点仍在，可凭新审批单再次 resume。
+        """
+        runtime = resolve_runtime(state)
+        db = runtime.db
+        user_id = int(state.get("user_id") or runtime.user_id)
+        tool_name = str(approved.get("tool_name") or state.get("current_tool_name") or "")
+        action_input = approved.get("action_input")
+        if not isinstance(action_input, dict):
+            action_input = dict(state.get("current_safe_input") or {})
+        execution_agent = canonical_agent_type(
+            str(approved.get("agent_type") or state.get("current_worker_agent") or state.get("worker_agent") or "")
+        )
+        approval_id = int(approved.get("approval_id") or state.get("pending_approval_request_id") or 0)
+        step = int(approved.get("step") or state.get("step") or 0)
+
+        result, serialized_input = await self._execute_tool(
+            tool_name,
+            action_input,
+            user_id,
+            db,
+            agent_type=execution_agent,
+            agent_run_id=runtime.agent_run.id,
+            skip_approval=True,
+            step_id=step,
+            trace_id=runtime.agent_run.trace_id,
+            organization_id=runtime.agent_run.organization_id,
+            cancel_check=lambda: self._is_cancel_requested(runtime),
+        )
+        result.setdefault("data", {})
+        if isinstance(result["data"], dict):
+            result["data"].setdefault("master_agent", state.get("master_agent"))
+            result["data"].setdefault("worker_agent", execution_agent)
+        observation = _json_dumps(result)
+        status = "success" if result.get("success") else "error"
+        error = result.get("error")
+
+        logs = self.get_run_logs(runtime.agent_run.id, db, user_id=user_id)
+        pending_log = next((item for item in reversed(logs) if item.status == "pending_approval"), None)
+        raw_decision = str(approved.get("raw_decision") or (pending_log.raw_decision if pending_log else "") or "")
+        if pending_log is not None:
+            self._update_log(db, pending_log, status="approved", error=None, output_result="approval_granted")
+        logged_input = json.loads(serialized_input) if serialized_input else dict(action_input)
+        logged_input["_master_agent"] = state.get("master_agent")
+        logged_input["_worker_agent"] = execution_agent
+        new_log = self._create_log(
+            db=db,
+            agent_run_id=runtime.agent_run.id,
+            step=step,
+            decision=state.get("current_decision") or _normalize_decision(raw_decision),
+            raw_decision=raw_decision,
+            tool_name=tool_name,
+            input_params=logged_input,
+            observation=observation,
+            output_result=observation,
+            status=status,
+            error=error,
+            # 审批等待时长不算步骤耗时。
+            duration_ms=0,
+        )
+        await self._emit_event(
+            runtime.event_callback,
+            {
+                "type": "step_completed",
+                "run_id": runtime.agent_run.id,
+                "log": self.serialize_log(new_log),
+                "master_agent": state.get("master_agent"),
+                "worker_agent": execution_agent,
+            },
+        )
+        if approval_id:
+            agent_approval_service.mark_executed(
+                db=db,
+                approval_id=approval_id,
+                user_id=user_id,
+                decision_note=str(approved.get("decision_note") or "审批通过后已恢复执行"),
+            )
+
+        state["awaiting_approval"] = False
+        state["pending_approval_request_id"] = None
+        state["last_observation"] = observation
+        if tool_name in EVIDENCE_SOURCE_TOOLS and result.get("success"):
+            state["evidence_scope_seen"] = True
+        self._save_workflow_snapshot(
+            runtime,
+            state,
+            node="decide",
+            last_observation=observation,
+            failure_reason=_sanitize_agent_error_message(error),
+            total_steps=step,
+        )
+        self._append_observation(state["messages"], raw_decision, observation)
         return state
 
     async def _workflow_partial(self, state: dict[str, Any]) -> dict[str, Any]:

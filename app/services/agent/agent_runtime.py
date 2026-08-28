@@ -72,6 +72,9 @@ class AgentGraphState(TypedDict, total=False):
     retry_count: int
     timed_out: bool
     awaiting_approval: bool
+    # 待审批写工具的审批单 id：图在 awaiting_approval 节点 interrupt，
+    # 恢复时凭它把审批结论对回具体这一步。
+    pending_approval_request_id: int | None
     # 当前步决策
     current_decision: dict[str, Any] | None
     current_raw: str
