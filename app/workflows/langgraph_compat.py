@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import sqlite3
 from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
@@ -12,8 +14,8 @@ END = "__end__"
 # 上下文不进入 checkpoint，因此可以承载 Session / ORM 实例 / 回调等活对象。
 RUNTIME_CONTEXT_KEY = "__runtime_context__"
 
-# 持久化 checkpoint 的本地 SQLite 路径（仅在安装 langgraph-checkpoint-sqlite 时启用）
-_CHECKPOINT_DB_PATH = os.environ.get("LANGGRAPH_CHECKPOINT_DB", "data/langgraph_checkpoints.sqlite")
+# 持久化 checkpoint 的本地 SQLite 默认路径（data/ 已在 .gitignore 中）
+_DEFAULT_CHECKPOINT_DB_PATH = "data/langgraph_checkpoints.sqlite"
 
 try:
     from langgraph.graph import END as LANGGRAPH_END
@@ -113,23 +115,92 @@ def workflow_engine_name() -> str:
     return "langgraph" if LANGGRAPH_AVAILABLE else "internal_state_graph"
 
 
+def _checkpoint_db_path() -> str:
+    """每次调用时读环境变量，测试可重定向到临时目录而不用关心导入顺序。"""
+    return os.environ.get("LANGGRAPH_CHECKPOINT_DB", _DEFAULT_CHECKPOINT_DB_PATH)
+
+
+if LANGGRAPH_AVAILABLE:
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver as _SqliteSaver
+
+        class _ThreadedSqliteSaver(_SqliteSaver):  # type: ignore[misc,valid-type]
+            """让同步 ``SqliteSaver`` 能给 async 图当 checkpointer 用。
+
+            ``SqliteSaver`` 的 ``aput`` / ``aget_tuple`` 直接 raise
+            ``NotImplementedError``，而 langgraph 的异步 pregel 循环只调 async 方法，
+            所以它不能直接喂给 ``ainvoke``。官方 ``AsyncSqliteSaver`` 又在 ``__init__``
+            里捕获当前 event loop 并终身绑定：导入期（无 loop）构造不出来，每个测试换一个
+            新 loop 也会失效。
+
+            这里沿用 langgraph 自己给 sqlite cache 用的做法——async 方法投到线程池执行
+            同步实现。``SqliteSaver`` 每次取 cursor 都加 ``threading.Lock``，因此
+            ``check_same_thread=False`` 的连接跨线程访问是安全的（其 docstring 亦如此说明）。
+            """
+
+            async def aget_tuple(self, config: Any) -> Any:
+                return await asyncio.to_thread(self.get_tuple, config)
+
+            async def alist(
+                self,
+                config: Any | None,
+                *,
+                filter: dict[str, Any] | None = None,
+                before: Any | None = None,
+                limit: int | None = None,
+            ) -> Any:
+                def _collect() -> list[Any]:
+                    return list(self.list(config, filter=filter, before=before, limit=limit))
+
+                for item in await asyncio.to_thread(_collect):
+                    yield item
+
+            async def aput(
+                self,
+                config: Any,
+                checkpoint: Any,
+                metadata: Any,
+                new_versions: Any,
+            ) -> Any:
+                return await asyncio.to_thread(self.put, config, checkpoint, metadata, new_versions)
+
+            async def aput_writes(
+                self,
+                config: Any,
+                writes: Any,
+                task_id: str,
+                task_path: str = "",
+            ) -> None:
+                await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
+
+            async def adelete_thread(self, thread_id: str) -> None:
+                await asyncio.to_thread(self.delete_thread, thread_id)
+
+        SQLITE_SAVER_AVAILABLE = True
+    except Exception:
+        SQLITE_SAVER_AVAILABLE = False
+else:
+    SQLITE_SAVER_AVAILABLE = False
+
+
 def build_checkpointer() -> Any | None:
     """Return a LangGraph checkpointer for durable, thread-scoped graph state.
 
-    Prefers a persistent SQLite saver when ``langgraph-checkpoint-sqlite`` is
-    installed (survives process restarts); otherwise falls back to the in-core
-    ``InMemorySaver`` (per-process). Returns ``None`` when the fallback engine is
-    active, since it has no checkpoint machinery.
+    Prefers SQLite (survives process restarts) when ``langgraph-checkpoint-sqlite``
+    is installed, wrapped so its synchronous implementation is usable from the async
+    pregel loop; otherwise falls back to the in-core ``InMemorySaver`` (per-process).
+    Returns ``None`` when the fallback engine is active, since it has no checkpoint
+    machinery. The connection lives for the process, like the compiled graph holding it.
     """
     if not LANGGRAPH_AVAILABLE:
         return None
-    try:  # 已安装 sqlite saver 时自动升级为跨重启持久化
-        from langgraph.checkpoint.sqlite import SqliteSaver
-
-        os.makedirs(os.path.dirname(_CHECKPOINT_DB_PATH) or ".", exist_ok=True)
-        return SqliteSaver.from_conn_string(_CHECKPOINT_DB_PATH).__enter__()
-    except Exception:
-        pass
+    if SQLITE_SAVER_AVAILABLE:
+        try:
+            db_path = _checkpoint_db_path()
+            os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+            return _ThreadedSqliteSaver(sqlite3.connect(db_path, check_same_thread=False))
+        except Exception:
+            pass
     try:
         from langgraph.checkpoint.memory import InMemorySaver
 

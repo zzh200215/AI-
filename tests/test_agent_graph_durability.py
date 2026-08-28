@@ -18,6 +18,7 @@ from app.models.user import User
 from app.services.agent.agent_runtime import AgentGraphState, AgentRuntime
 from app.services.agent.agent_service import AgentService
 from app.tools.base import BaseAgentTool, tool_success
+from app.workflows.langgraph_compat import SQLITE_SAVER_AVAILABLE, build_checkpointer
 
 
 class FakeTool(BaseAgentTool):
@@ -62,6 +63,14 @@ class AgentGraphDurabilityTests(unittest.IsolatedAsyncioTestCase):
             {"db", "agent_run", "user_id", "event_callback", "model", "final_run"},
         )
 
+    def test_module_singleton_gets_the_persistent_saver_at_import_time(self):
+        """模块级单例在导入期（无 event loop）构造，这是持久 saver 唯一的落地时机。"""
+        if not SQLITE_SAVER_AVAILABLE:
+            self.skipTest("langgraph-checkpoint-sqlite 未安装")
+        from app.services.agent.agent_service import agent_service
+
+        self.assertEqual(type(agent_service._workflow.checkpointer).__name__, "_ThreadedSqliteSaver")
+
     async def _run_once(self):
         calls = [
             '{"thought":"查询任务","action_type":"tool_call","tool_name":"task_query_tool","action_input":{}}',
@@ -100,7 +109,10 @@ class AgentGraphDurabilityTests(unittest.IsolatedAsyncioTestCase):
             self.skipTest("fallback workflow engine has no checkpointer")
 
         config = self.service._graph_config(run)
-        self.assertEqual(config["configurable"]["thread_id"], f"agent-run-{run.id}")
+        thread_id = config["configurable"]["thread_id"]
+        self.assertTrue(thread_id.startswith(f"agent-run-{run.id}-"))
+        # trace_id 参与 thread_id：换库后自增 id 重复也不会撞上旧 Run 的 checkpoint。
+        self.assertIn(str(run.trace_id), thread_id)
 
         snapshot = workflow.get_state(config)
         self.assertGreater(len(snapshot.values), 0)
@@ -119,6 +131,28 @@ class AgentGraphDurabilityTests(unittest.IsolatedAsyncioTestCase):
                     type(value).__module__.startswith(("sqlalchemy", "app.models")),
                     f"live object leaked into state channel {key}: {type(value).__name__}",
                 )
+
+    async def test_checkpoints_outlive_the_saver_that_wrote_them(self):
+        """换一个全新 saver 读同一个 DB 文件——重启后能否续跑，取决于这一步。"""
+        if not SQLITE_SAVER_AVAILABLE:
+            self.skipTest("langgraph-checkpoint-sqlite 未安装，checkpoint 仅进程内有效")
+
+        run = await self._run_once()
+        thread_config = self.service._graph_config(run)
+
+        written = self.service._workflow.get_state(thread_config)
+        self.assertGreater(len(written.values), 0)
+
+        # 新连接、新 saver 实例，只共享磁盘文件——等价于进程重启后重新打开 checkpoint。
+        reopened = build_checkpointer()
+        self.assertNotIsInstance(reopened, type(None))
+        restored = reopened.get_tuple(thread_config)
+        self.assertIsNotNone(restored, "checkpoint 没有落到磁盘，重启后无法恢复")
+        self.assertEqual(restored.checkpoint["channel_values"]["goal"], written.values["goal"])
+        self.assertEqual(
+            restored.checkpoint["channel_values"]["worker_plan"],
+            written.values["worker_plan"],
+        )
 
 
 if __name__ == "__main__":

@@ -829,8 +829,16 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
 
     @staticmethod
     def _graph_config(agent_run: AgentRun) -> dict[str, Any]:
-        """thread_id 按 Run 划分：checkpointer 以此为主键落盘，可回放/续跑同一次执行。"""
-        return {"configurable": {"thread_id": f"agent-run-{agent_run.id}"}}
+        """thread_id 按 Run 划分：checkpointer 以此为主键落盘，可回放/续跑同一次执行。
+
+        必须带上 trace_id。checkpoint 现在落到 SQLite 并跨进程存活，而 ``AgentRun.id``
+        只在单个业务库内唯一——重建库或换库后自增 id 会重复，只用 id 会让新 Run 直接
+        恢复到上一个同 id Run 的图状态（表现为新 Run 一启动就停在旧的终态）。
+        """
+        thread_id = f"agent-run-{agent_run.id}"
+        if agent_run.trace_id:
+            thread_id = f"{thread_id}-{agent_run.trace_id}"
+        return {"configurable": {"thread_id": thread_id}}
 
     async def run(
         self,

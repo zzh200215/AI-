@@ -42,6 +42,12 @@ os.environ.setdefault(
     os.path.join(tempfile.gettempdir(), "aibg_test_eval_bundle"),
 )
 
+# LangGraph checkpoint 落 SQLite：测试写临时文件，避免仓库 data/ 里累积测试 thread。
+os.environ.setdefault(
+    "LANGGRAPH_CHECKPOINT_DB",
+    os.path.join(tempfile.gettempdir(), "aibg_test_langgraph", "checkpoints.sqlite"),
+)
+
 # CI 无 data/ 目录：为 OCR 测试生成占位 PNG fixture（本地产物不入 git）。
 def _ensure_upload_fixtures() -> None:
     import io

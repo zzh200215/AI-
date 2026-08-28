@@ -21,8 +21,8 @@ langchain-community==0.4.2
 langchain-text-splitters==1.1.2
 langgraph==1.2.6
 langgraph-checkpoint==4.1.1
-# 可选：安装后 agentic-RAG / agent 图的 checkpoint 自动升级为跨进程重启持久化（SQLite 落盘）
-# langgraph-checkpoint-sqlite
+# agentic-RAG / agent 图的 checkpoint 落盘到 SQLite，跨进程重启可回放/续跑
+langgraph-checkpoint-sqlite==3.1.1
 openai==1.54.4
 httpx==0.27.2
 PyPDF2==3.0.1
