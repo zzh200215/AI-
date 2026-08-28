@@ -4,7 +4,8 @@ import asyncio
 import os
 import sqlite3
 from collections import defaultdict
-from typing import Any, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any
 
 START = "__start__"
 END = "__end__"
@@ -145,6 +146,24 @@ class _FallbackCompiledGraph:
             current = next_nodes[0] if next_nodes else END
         return current_state
 
+    async def astream(
+        self,
+        state: dict[str, Any],
+        config: dict[str, Any] | None = None,
+        *,
+        context: Any | None = None,
+        stream_mode: Any = None,
+    ) -> AsyncIterator[Any]:
+        """执行整张图，但不产出任何流块——回退引擎没有 ``custom`` 流通道。
+
+        节点里的 ``graph_stream_writer()`` 在回退引擎下返回 None，进度事件因此仍直接回调
+        订阅者：结果与真 langgraph 的「事件出图再由服务层转发」一致，只是少了图这一跳。
+        """
+        _ = stream_mode
+        await self.ainvoke(state, config, context=context)
+        for chunk in ():
+            yield chunk
+
 
 class _FallbackStateGraph:
     def __init__(self, state_type: type[dict[str, Any]] | None = None, context_schema: type | None = None) -> None:
@@ -195,6 +214,27 @@ GRAPH_END = LANGGRAPH_END if LANGGRAPH_AVAILABLE else END
 
 def workflow_engine_name() -> str:
     return "langgraph" if LANGGRAPH_AVAILABLE else "internal_state_graph"
+
+
+def graph_stream_writer() -> Callable[[Any], None] | None:
+    """当前节点的 ``custom`` 流写入口；不在图内执行时返回 None。
+
+    ``get_stream_writer()`` 在 runnable 上下文之外直接抛 RuntimeError，这个返回值正好用来
+    区分「节点内」与「节点外」：节点内的进度事件写进图的流通道，由服务层从流里取出转发；
+    服务层自己发的事件（run 开始 / 失败 / 恢复）没有图上下文，仍直接回调订阅者。
+
+    只有当图以含 ``"custom"`` 的 ``stream_mode`` 驱动时 writer 才是真的，否则 LangGraph
+    给的是 no-op、事件被静默丢弃。因此图必须一律经 ``AgentService._stream_workflow``
+    驱动，这条不变量由 tests/test_agent_stream_events.py 守住。
+    """
+    if not LANGGRAPH_AVAILABLE:
+        return None
+    try:
+        from langgraph.config import get_stream_writer
+
+        return get_stream_writer()
+    except Exception:  # noqa: BLE001 - 图外调用：无 runnable 上下文
+        return None
 
 
 if LANGGRAPH_AVAILABLE:

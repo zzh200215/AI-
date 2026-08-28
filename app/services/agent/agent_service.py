@@ -77,6 +77,7 @@ from app.workflows.langgraph_compat import (
     Command,
     StateGraph,
     build_checkpointer,
+    graph_stream_writer,
     workflow_engine_name,
 )
 
@@ -332,9 +333,41 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         event_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
         payload: dict[str, Any],
     ) -> None:
+        """节点内的进度事件写进图的 ``custom`` 流通道，节点外直接回调订阅者。
+
+        事件传输原先是自建的：回调作为活对象随 runtime 传进每个节点，节点直接 await 业务侧
+        的 WebSocket 发送。改走流通道后节点只往图里写一条数据，谁消费、怎么背压由
+        ``_stream_workflow`` 一处决定——这也是 SSE / 轮询等其它订阅方式的前提。
+        回退引擎没有流通道，``graph_stream_writer()`` 返回 None，走回调路径。
+        """
+        writer = graph_stream_writer()
+        if writer is not None:
+            writer(payload)
+            return
         if not event_callback:
             return
         await event_callback(payload)
+
+    async def _stream_workflow(
+        self,
+        graph_input: Any,
+        *,
+        agent_run: AgentRun,
+        runtime: AgentRuntime,
+    ) -> None:
+        """用 ``astream`` 驱动图，并把 ``custom`` 通道里的进度事件转给订阅者。
+
+        本服务所有图调用（首次执行 / 断点恢复 / 快照恢复）都必须走这里：``ainvoke`` 下
+        LangGraph 给节点的是 no-op writer，节点事件会被静默丢弃。
+        """
+        async for payload in self._workflow.astream(
+            graph_input,
+            self._graph_config(agent_run),
+            context=runtime,
+            stream_mode="custom",
+        ):
+            if isinstance(payload, dict) and runtime.event_callback:
+                await runtime.event_callback(payload)
 
     def _create_run(
         self,
@@ -1027,7 +1060,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                 organization_id=organization_id,
                 max_steps=max_steps,
             ):
-                await self._workflow.ainvoke(state, self._graph_config(agent_run), context=runtime)
+                await self._stream_workflow(state, agent_run=agent_run, runtime=runtime)
             result_run = runtime.final_run or agent_run
             self._sync_a2a_delegation(db, result_run)
             return result_run
@@ -1324,7 +1357,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             action_input=action_input,
             execution_agent=execution_agent,
         )
-        await self._workflow.ainvoke(
+        await self._stream_workflow(
             Command(
                 resume=self._approval_resume_payload(
                     approval=approval,
@@ -1334,8 +1367,8 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                     agent_run=agent_run,
                 )
             ),
-            self._graph_config(agent_run),
-            context=runtime,
+            agent_run=agent_run,
+            runtime=runtime,
         )
         result_run = runtime.final_run or agent_run
         self._sync_a2a_delegation(db, result_run)
@@ -1506,7 +1539,7 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
             result_run = runtime.final_run or agent_run
             self._sync_a2a_delegation(db, result_run)
             return result_run
-        await self._workflow.ainvoke(state, self._graph_config(agent_run), context=runtime)
+        await self._stream_workflow(state, agent_run=agent_run, runtime=runtime)
         result_run = runtime.final_run or agent_run
         self._sync_a2a_delegation(db, result_run)
         return result_run
