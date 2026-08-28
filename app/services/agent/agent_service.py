@@ -1,4 +1,3 @@
-import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -643,34 +642,6 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         finally:
             branch_db.close()
 
-    async def _run_parallel_read_only(self, runtime: AgentRuntime, state: dict[str, Any]) -> dict[str, Any]:
-        branch_plan = state.get("parallel_plan") or {}
-        semaphore = asyncio.Semaphore(self.settings.AGENT_PARALLEL_MAX_WORKERS)
-
-        async def run_bounded(**kwargs):
-            async with semaphore:
-                return await self._execute_parallel_read_only_worker(**kwargs)
-
-        jobs = []
-        for index, (worker_name, step) in enumerate(branch_plan.items()):
-            if not isinstance(step, dict):
-                continue
-            jobs.append(
-                run_bounded(
-                    worker_name=worker_name,
-                    tool_name=str(step.get("tool_name") or ""),
-                    action_input=step.get("action_input") if isinstance(step.get("action_input"), dict) else {},
-                    user_id=state["user_id"],
-                    db=runtime.db,
-                    agent_run_id=runtime.agent_run.id,
-                    step_id=int(state.get("step") or 0) + index + 1,
-                    trace_id=runtime.agent_run.trace_id,
-                    organization_id=runtime.agent_run.organization_id,
-                )
-            )
-        results = await asyncio.gather(*jobs) if jobs else []
-        return {item["worker_agent"]: item for item in results}
-
     def _build_run_result_payload(
         self,
         *,
@@ -757,6 +728,8 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         graph = StateGraph(AgentGraphState, context_schema=AgentRuntime)
         graph.add_node("decide", self._workflow_decide)
         graph.add_node("parallel_fanout", self._workflow_parallel_fanout)
+        graph.add_node("parallel_branch", self._workflow_parallel_branch)
+        graph.add_node("parallel_collect", self._workflow_parallel_collect)
         graph.add_node("parallel_aggregate", self._workflow_parallel_aggregate)
         graph.add_node("cancelled", self._workflow_cancelled)
         graph.add_node("finish", self._workflow_finish)
@@ -789,8 +762,16 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
                 "parallel_aggregate": "parallel_aggregate",
             },
         )
+        # 并行只读分支 = 图原生 map-reduce：fanout 用 Send 展开出 N 个并发分支任务，
+        # 每个分支只写自己那一格（reducer 合并），collect 再按计划顺序补审计日志。
         graph.add_conditional_edges(
             "parallel_fanout",
+            self._workflow_dispatch_parallel_branches,
+            ["parallel_branch", "parallel_collect"],
+        )
+        graph.add_edge("parallel_branch", "parallel_collect")
+        graph.add_conditional_edges(
+            "parallel_collect",
             self._workflow_route_after_parallel_fanout,
             {
                 "verify_evidence": "verify_evidence",
@@ -847,11 +828,17 @@ class AgentService(EvidenceVerificationMixin, AgentWorkflowNodesMixin, Superviso
         必须带上 trace_id。checkpoint 现在落到 SQLite 并跨进程存活，而 ``AgentRun.id``
         只在单个业务库内唯一——重建库或换库后自增 id 会重复，只用 id 会让新 Run 直接
         恢复到上一个同 id Run 的图状态（表现为新 Run 一启动就停在旧的终态）。
+
+        ``max_concurrency`` 限制同一 superstep 内并发执行的任务数，即并行只读分支的并发
+        上限（LangGraph 用它给任务提交加信号量），取代节点内手写的 semaphore。
         """
         thread_id = f"agent-run-{agent_run.id}"
         if agent_run.trace_id:
             thread_id = f"{thread_id}-{agent_run.trace_id}"
-        return {"configurable": {"thread_id": thread_id}}
+        return {
+            "configurable": {"thread_id": thread_id},
+            "max_concurrency": get_settings().AGENT_PARALLEL_MAX_WORKERS,
+        }
 
     async def run(
         self,

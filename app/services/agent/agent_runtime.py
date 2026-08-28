@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,22 @@ from app.services.agent.agent_run_state import AgentRunState
 from app.workflows.langgraph_compat import RUNTIME_CONTEXT_KEY
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def merge_parallel_branches(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """``parallel_results`` 的通道 reducer：按 worker 名合并各并行分支的结果。
+
+    并行分支是同一 superstep 内的并发任务，会同时写这一个通道；没有 reducer 的通道在
+    一步内被写两次会直接 ``InvalidUpdateError``。选「按键合并」而不是「列表追加」是因为
+    它幂等——本项目的节点惯例是返回整份 state，reducer 通道会被后续节点反复写入同样的
+    值，用 ``operator.add`` 会让结果成倍增长。
+    """
+    merged = dict(left or {})
+    merged.update(right or {})
+    return merged
 
 
 @dataclass
@@ -61,7 +77,9 @@ class AgentGraphState(TypedDict, total=False):
     # 并行只读分支
     parallel_plan: dict[str, Any] | None
     parallel_pending: bool
-    parallel_results: dict[str, Any]
+    # 每个分支节点只写自己那一格，靠 reducer 汇总（并发写同一通道的必要条件）。
+    parallel_results: Annotated[dict[str, Any], merge_parallel_branches]
+    parallel_started_at: float
     parallel_branch_logs: list[dict[str, Any]]
     # 步进与预算
     messages: list[dict[str, str]]

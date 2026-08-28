@@ -17,12 +17,16 @@ from app.services.agent.agent_prompts import (
     EVIDENCE_GATED_WRITE_TOOLS,
     EVIDENCE_SOURCE_TOOLS,
     POLICY_GUARDRAIL_ROLE,
+)
+from app.services.agent.agent_prompts import (
     normalize_decision as _normalize_decision,
+)
+from app.services.agent.agent_prompts import (
     sanitize_agent_error_message as _sanitize_agent_error_message,
 )
 from app.services.agent.agent_run_state import AgentRunState
 from app.services.agent.agent_runtime import resolve_runtime
-from app.workflows.langgraph_compat import INTERRUPT_AVAILABLE, interrupt
+from app.workflows.langgraph_compat import INTERRUPT_AVAILABLE, Send, interrupt
 
 # 连续非法决策（retry）上限：达到后强制收敛为 finish，避免挤占受限的步骤预算。
 MAX_CONSECUTIVE_RETRIES = 3
@@ -214,11 +218,76 @@ class AgentWorkflowNodesMixin:
         return state
 
     async def _workflow_parallel_fanout(self, state: dict[str, Any]) -> dict[str, Any]:
+        """并行只读分支的调度点：本节点只登记起点，分支由 ``Send`` 交给图去跑。
+
+        分支的并发调度过去是节点内部 ``asyncio.gather`` + 手写 semaphore，图上看不到；
+        现在每个分支是一个真实的图任务（见 ``_workflow_dispatch_parallel_branches``），
+        并发上限由 ``config["max_concurrency"]`` 控制，结果经通道 reducer 汇总。
+        """
         runtime = resolve_runtime(state)
-        started = time.time()
-        branches = await self._run_parallel_read_only(runtime, state)
+        state["parallel_started_at"] = time.time()
+        self._save_workflow_snapshot(runtime, state, node="parallel_fanout")
+        return state
+
+    def _workflow_dispatch_parallel_branches(self, state: dict[str, Any]) -> Any:
+        """把 branch plan 展开成 ``Send`` 列表——同一 superstep 内的 N 个并发分支任务。
+
+        ``Send.arg`` 就是分支节点收到的 state，且会作为 pending write 落进 checkpoint，
+        因此只放纯数据；Session / 回调等活对象仍从 runtime context 取。
+        step_id 在这里按计划顺序定好，分支完成顺序便不影响日志编号。
+        """
+        branch_plan = state.get("parallel_plan") or {}
+        base_step = int(state.get("step") or 0)
+        sends = [
+            Send(
+                "parallel_branch",
+                {
+                    "worker_agent": worker_name,
+                    "tool_name": str(step.get("tool_name") or ""),
+                    "action_input": step.get("action_input") if isinstance(step.get("action_input"), dict) else {},
+                    "user_id": int(state.get("user_id") or 0),
+                    "step_id": base_step + index,
+                },
+            )
+            for index, (worker_name, step) in enumerate(branch_plan.items(), start=1)
+            if isinstance(step, dict)
+        ]
+        # 空计划不产生分支：直接进汇总节点，否则该 superstep 无任务、图会提前结束。
+        return sends or "parallel_collect"
+
+    async def _workflow_parallel_branch(self, state: dict[str, Any]) -> dict[str, Any]:
+        """单个并行只读分支。``state`` 是本分支的 ``Send.arg``，不是整份图状态。
+
+        只返回自己那一格增量，由 ``merge_parallel_branches`` reducer 合并——并发分支写
+        同一通道必须如此。分支各用独立 Session（``_execute_parallel_read_only_worker``
+        内建），并发使用同一个 Session 是不安全的。
+        """
+        runtime = resolve_runtime(state)
+        branch = await self._execute_parallel_read_only_worker(
+            worker_name=str(state.get("worker_agent") or ""),
+            tool_name=str(state.get("tool_name") or ""),
+            action_input=state.get("action_input") if isinstance(state.get("action_input"), dict) else {},
+            user_id=int(state.get("user_id") or runtime.user_id),
+            db=runtime.db,
+            agent_run_id=runtime.agent_run.id,
+            step_id=int(state.get("step_id") or 0),
+            trace_id=runtime.agent_run.trace_id,
+            organization_id=runtime.agent_run.organization_id,
+        )
+        return {"parallel_results": {branch["worker_agent"]: branch}}
+
+    async def _workflow_parallel_collect(self, state: dict[str, Any]) -> dict[str, Any]:
+        """汇总并行分支：按计划顺序补齐审计日志与事件，再交给证据核验/汇聚。
+
+        日志与事件按 ``parallel_plan`` 的顺序而非分支完成顺序生成：并发下完成顺序不定，
+        编号跟着它走会让同一次执行的审计记录不可复现。
+        """
+        runtime = resolve_runtime(state)
+        branches = state.get("parallel_results") or {}
+        ordered = [branches[name] for name in (state.get("parallel_plan") or {}) if name in branches]
+        ordered.extend(item for name, item in branches.items() if name not in (state.get("parallel_plan") or {}))
         branch_logs = []
-        for index, branch in enumerate(branches.values(), start=1):
+        for index, branch in enumerate(ordered, start=1):
             observation = _json_dumps(
                 {
                     "success": branch["success"],
@@ -246,24 +315,25 @@ class AgentWorkflowNodesMixin:
                 runtime.event_callback,
                 {"type": "step_completed", "run_id": runtime.agent_run.id, "log": self.serialize_log(log), "master_agent": state["master_agent"], "worker_agent": branch["worker_agent"]},
             )
+        all_ok = all(item["success"] for item in ordered)
         fanout_observation = _json_dumps(
-            {"success": all(item["success"] for item in branches.values()), "data": {"branches": branches, "execution_mode": "parallel_read_only"}}
+            {"success": all_ok, "data": {"branches": branches, "execution_mode": "parallel_read_only"}}
         )
-        fanout_log = self._create_log(
-            db=runtime.db, agent_run_id=runtime.agent_run.id, step=int(state.get("step") or 0) + len(branches) + 1,
+        self._create_log(
+            db=runtime.db, agent_run_id=runtime.agent_run.id, step=int(state.get("step") or 0) + len(ordered) + 1,
             decision={"action_type": "parallel_fanout", "thought": "[supervisor_agent] 并行只读 Worker 已启动。"}, raw_decision="parallel_read_only",
-            tool_name="supervisor_parallel_fanout", input_params={"workers": list(branches)}, observation=fanout_observation,
-            output_result=fanout_observation, status="success" if all(item["success"] for item in branches.values()) else "error",
-            error=None, duration_ms=int((time.time() - started) * 1000),
+            tool_name="supervisor_parallel_fanout", input_params={"workers": [item["worker_agent"] for item in ordered]},
+            observation=fanout_observation, output_result=fanout_observation, status="success" if all_ok else "error",
+            error=None, duration_ms=int((time.time() - float(state.get("parallel_started_at") or time.time())) * 1000),
         )
+        evidence_seen = any(item["success"] and item["tool_name"] in EVIDENCE_SOURCE_TOOLS for item in ordered)
         state.update(
             {
-                "parallel_results": branches,
                 "parallel_branch_logs": branch_logs,
-                "step": int(state.get("step") or 0) + len(branches) + 1,
+                "step": int(state.get("step") or 0) + len(ordered) + 1,
                 "last_observation": fanout_observation,
-                "evidence_scope_seen": any(item["success"] and item["tool_name"] in EVIDENCE_SOURCE_TOOLS for item in branches.values()),
-                "needs_evidence_verification": any(item["success"] and item["tool_name"] in EVIDENCE_SOURCE_TOOLS for item in branches.values()),
+                "evidence_scope_seen": evidence_seen,
+                "needs_evidence_verification": evidence_seen,
                 "verification_target": "parallel_aggregate",
             }
         )

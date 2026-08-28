@@ -15,8 +15,8 @@ from app.workflows.langgraph_compat import _FallbackStateGraph
 
 
 WORKFLOW_NODES = (
-    "decide", "parallel_fanout", "parallel_aggregate", "cancelled", "finish",
-    "retry", "tool_call", "verify_evidence", "evidence_insufficient",
+    "decide", "parallel_fanout", "parallel_branch", "parallel_collect", "parallel_aggregate",
+    "cancelled", "finish", "retry", "tool_call", "verify_evidence", "evidence_insufficient",
     "partial", "awaiting_approval",
 )
 
